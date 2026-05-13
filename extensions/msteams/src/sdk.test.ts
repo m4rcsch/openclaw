@@ -128,6 +128,22 @@ describe("createMSTeamsApp", () => {
     );
   });
 
+  it("preserves both Teams SDK and OpenClaw User-Agent fragments", async () => {
+    const creds: MSTeamsCredentials = {
+      type: "secret",
+      appId: "test-app-id",
+      appPassword: "test-secret",
+      tenantId: "test-tenant",
+    };
+
+    const app = await createMSTeamsApp(creds);
+    const headers = (
+      app as unknown as { client?: { options?: { headers?: Record<string, string> } } }
+    ).client?.options?.headers;
+
+    expect(headers?.["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/\S+ OpenClaw\/\S+$/);
+  });
+
   it("accepts custom messagingEndpoint", async () => {
     const creds: MSTeamsCredentials = {
       type: "secret",

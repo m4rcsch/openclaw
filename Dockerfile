@@ -79,7 +79,7 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
 # still exiting successfully, so retry the package downloader before failing.
 # Skip the entire check when matrix is not a bundled extension (e.g. msteams-only builds).
 RUN set -eux; \
-    if ! printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ' ' '\n' | grep -qx 'matrix'; then \
+    if ! printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' ' ' | tr ' ' '\n' | grep -qx 'matrix'; then \
       echo "==> matrix not bundled, skipping matrix-sdk-crypto check"; \
       exit 0; \
     fi; \

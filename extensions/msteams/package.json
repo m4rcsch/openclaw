@@ -11,6 +11,7 @@
     "@azure/identity": "4.13.1",
     "@microsoft/teams.api": "2.0.10",
     "@microsoft/teams.apps": "2.0.10",
+    "@microsoft/teams.common": "2.0.10",
     "express": "5.2.1",
     "typebox": "1.1.38"
   },

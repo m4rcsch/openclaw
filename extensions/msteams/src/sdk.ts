@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
 import { buildOpenClawUserAgentFragment } from "./user-agent.js";
 
@@ -30,6 +31,11 @@ type MSTeamsExpressAdapterCtor = new (
 type TeamsSdkModules = {
   App: typeof import("@microsoft/teams.apps").App;
   ExpressAdapter: MSTeamsExpressAdapterCtor;
+};
+
+type MSTeamsHttpClientCtor = new (options?: { headers?: Record<string, string> }) => unknown;
+type TeamsCommonHttpModule = {
+  Client: MSTeamsHttpClientCtor;
 };
 
 /**
@@ -207,6 +213,15 @@ async function loadAzureIdentity(): Promise<AzureIdentityModule> {
 }
 
 let sdkAppPromise: Promise<TeamsSdkModules> | null = null;
+let teamsCommonHttpModule: TeamsCommonHttpModule | null = null;
+const requireTeamsSdkDependency = createRequire(import.meta.url);
+
+function loadTeamsCommonHttpModule(): TeamsCommonHttpModule {
+  teamsCommonHttpModule ??= requireTeamsSdkDependency(
+    "@microsoft/teams.common/http",
+  ) as TeamsCommonHttpModule;
+  return teamsCommonHttpModule;
+}
 
 async function loadSdkModules(): Promise<TeamsSdkModules> {
   sdkAppPromise ??= import("@microsoft/teams.apps").then((m) => ({
@@ -274,12 +289,12 @@ export async function createMSTeamsApp(
 ): Promise<MSTeamsApp> {
   const { App } = await loadSdkModules();
   // Tag outbound SDK HTTP calls with a User-Agent fragment so the Teams
-  // backend can identify OpenClaw traffic for usage telemetry. The SDK's
-  // Client.clone merges this with its own `teams.ts[apps]/<sdk-version>` so
-  // we only pass the OpenClaw piece; the final UA looks like
-  // "OpenClaw/<openclaw-version> teams.ts[apps]/<sdk-version>".
+  // backend can identify OpenClaw traffic for usage telemetry. The SDK only
+  // merges its own `teams.ts[apps]/<sdk-version>` identifier when callers pass
+  // a real Client/factory, not a plain client options object.
+  const { Client } = loadTeamsCommonHttpModule();
   const appOptions: Record<string, unknown> = {
-    client: { headers: { "User-Agent": buildOpenClawUserAgentFragment() } },
+    client: new Client({ headers: { "User-Agent": buildOpenClawUserAgentFragment() } }),
     ...(options?.httpServerAdapter ? { httpServerAdapter: options.httpServerAdapter } : {}),
     ...(options?.messagingEndpoint ? { messagingEndpoint: options.messagingEndpoint } : {}),
     ...(options?.oauthDefaultConnectionName
