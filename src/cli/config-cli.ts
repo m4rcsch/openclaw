@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import {
   normalizeAgentModelMapForConfig,
@@ -155,11 +156,6 @@ function normalizeConfigMutationExplicitSetPath(path: PathSegment[]): PathSegmen
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
 const SECRET_PROVIDER_PATH_PREFIX: PathSegment[] = ["secrets", "providers"];
 const PLUGIN_INSTALL_RECORD_PATH_PREFIX: PathSegment[] = ["plugins", "installs"];
-// Re-stamped on every write by stampConfigVersion (src/config/io.ts); user input never persists.
-const AUTO_MANAGED_META_PATHS: ReadonlyArray<ReadonlyArray<PathSegment>> = [
-  ["meta", "lastTouchedVersion"],
-  ["meta", "lastTouchedAt"],
-];
 const CONFIG_SET_EXAMPLE_VALUE = formatCliCommand(
   "openclaw config set gateway.port 19001 --strict-json",
 );
@@ -1377,7 +1373,7 @@ function formatPluginInstallConfigSetError(): string {
 }
 
 function isAutoManagedMetaPath(path: ReadonlyArray<PathSegment>): boolean {
-  return AUTO_MANAGED_META_PATHS.some((managedPath) => pathStartsWith(path, managedPath));
+  return AUTO_MANAGED_CONFIG_META_PATHS.some((managedPath) => pathStartsWith(path, managedPath));
 }
 
 function valueHasAutoManagedChild(value: unknown, childPath: ReadonlyArray<PathSegment>): boolean {
@@ -1437,7 +1433,7 @@ function findAutoManagedMetaTargets(
       record(operation.requestedPath);
       continue;
     }
-    for (const managedPath of AUTO_MANAGED_META_PATHS) {
+    for (const managedPath of AUTO_MANAGED_CONFIG_META_PATHS) {
       if (operation.requestedPath.length >= managedPath.length) {
         continue;
       }
