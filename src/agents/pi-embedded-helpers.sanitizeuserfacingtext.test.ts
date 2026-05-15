@@ -346,6 +346,13 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("After");
   });
 
+  it("strips adjacent function response payloads that match explanation wording", () => {
+    const input =
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response> response wrapper secret</function_response>\nAfter';
+
+    expect(sanitizeUserFacingText(input)).toBe("After");
+  });
+
   it("strips dangling same-line function response payloads with leading spaces", () => {
     const input =
       'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response> raw output';

@@ -685,22 +685,25 @@ describe("stripToolCallXmlTags", () => {
     expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe("");
   });
 
-  it("preserves literal function_response prose after a stripped tool-call block", () => {
+  it("strips function_response-looking prose adjacent to a stripped tool-call block", () => {
     const input =
       '<tool_call>{"name":"exec"}</tool_call>\n\n<function_response> is the response wrapper.';
 
-    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(
-      "\n\n<function_response> is the response wrapper.",
-    );
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe("\n\n");
   });
 
-  it("preserves literal closed function_response prose after a stripped tool-call block", () => {
+  it("strips closed function_response-looking prose adjacent to a stripped tool-call block", () => {
     const input =
       '<tool_call>{"name":"exec"}</tool_call>\n<function_response> is the response wrapper; close it with </function_response>.';
 
-    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(
-      "\n<function_response> is the response wrapper; close it with </function_response>.",
-    );
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe("\n.");
+  });
+
+  it("strips adjacent function_response payloads that match explanation wording", () => {
+    const input =
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response> response wrapper secret</function_response>\nAfter';
+
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe("\nAfter");
   });
 
   it("strips compact function_response wrappers while preserving same-line prose tails", () => {

@@ -204,21 +204,6 @@ function hasSameLineContentAfterOpeningTag(text: string, tag: ParsedToolCallTag)
   return after < text.length && text[after] !== "\n" && text[after] !== "\r";
 }
 
-function isLikelyFunctionResponseTagProse(
-  text: string,
-  tag: ParsedToolCallTag,
-  closeStart: number,
-): boolean {
-  if (text[tag.end] !== " " && text[tag.end] !== "\t") {
-    return false;
-  }
-  const body = text.slice(tag.end, closeStart === -1 ? text.length : closeStart);
-  if (body.includes("\n") || body.includes("\r")) {
-    return false;
-  }
-  return /\b(?:response wrapper|wrapper syntax|xml tag|tag syntax)\b/i.test(body);
-}
-
 function isVisibleLineStart(text: string): boolean {
   let idx = text.length - 1;
   while (idx >= 0 && (text[idx] === " " || text[idx] === "\t")) {
@@ -388,7 +373,6 @@ export function stripToolCallXmlTags(
           : -1;
       const shouldStripAdjacentResult =
         isAdjacentToStrippedToolCallBlock(text, idx, lastStrippedToolCallBlockEnd) &&
-        !isLikelyFunctionResponseTagProse(text, tag, functionResponseCloseStart) &&
         (isOpeningTagFollowedByLineBreak(text, tag) ||
           functionResponseCloseStart !== -1 ||
           hasSameLineContentAfterOpeningTag(text, tag));
