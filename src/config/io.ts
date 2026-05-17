@@ -783,7 +783,13 @@ function appendChannelProtectedPolicyChangeReasons(params: {
   explicitSetPaths?: readonly (readonly string[])[];
   reasons: string[];
 }): void {
-  const protectedChannelAllowlistKeys = new Set(["allowFrom", "groupAllowFrom"]);
+  const protectedChannelAllowlistKeys = new Set([
+    "allowFrom",
+    "groupAllowFrom",
+    "approvers",
+    "roles",
+    "users",
+  ]);
   const channelConfigMetaKeys = new Set(["defaults", "modelByChannel"]);
   const previousChannels = getObjectPathValue(params.previousConfig, ["channels"]);
   const nextChannels = getObjectPathValue(params.nextConfig, ["channels"]);

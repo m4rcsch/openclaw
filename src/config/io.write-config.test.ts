@@ -2127,11 +2127,29 @@ describe("config io write", () => {
         channels: {
           googlechat: {
             dm: { allowFrom: ["space:trusted"] },
+            groups: {
+              ops: {
+                users: ["users/trusted"],
+              },
+            },
+          },
+          discord: {
+            guilds: {
+              main: {
+                users: ["user:trusted"],
+                channels: {
+                  alerts: {
+                    roles: ["role:trusted"],
+                  },
+                },
+              },
+            },
           },
           matrix: {
             accounts: {
               ops: {
                 dm: { allowFrom: ["@trusted:example.org"] },
+                execApprovals: { approvers: ["@owner:example.org"] },
               },
             },
           },
@@ -2142,11 +2160,29 @@ describe("config io write", () => {
         channels: {
           googlechat: {
             dm: {},
+            groups: {
+              ops: {
+                users: ["users/trusted", "users/stale"],
+              },
+            },
+          },
+          discord: {
+            guilds: {
+              main: {
+                users: [],
+                channels: {
+                  alerts: {
+                    roles: ["role:trusted", "role:stale"],
+                  },
+                },
+              },
+            },
           },
           matrix: {
             accounts: {
               ops: {
                 dm: { allowFrom: ["@trusted:example.org", "@stale:example.org"] },
+                execApprovals: { approvers: [] },
               },
             },
           },
@@ -2178,7 +2214,11 @@ describe("config io write", () => {
         code: "CONFIG_WRITE_REJECTED",
         reasons: expect.arrayContaining([
           "protected-list-removed:channels.googlechat.dm.allowFrom",
+          "protected-list-widened:channels.googlechat.groups.ops.users",
+          "protected-list-removed:channels.discord.guilds.main.users",
+          "protected-list-widened:channels.discord.guilds.main.channels.alerts.roles",
           "protected-list-widened:channels.matrix.accounts.ops.dm.allowFrom",
+          "protected-list-removed:channels.matrix.accounts.ops.execApprovals.approvers",
         ]),
       });
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
