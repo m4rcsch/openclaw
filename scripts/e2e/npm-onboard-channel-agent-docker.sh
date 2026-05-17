@@ -164,14 +164,14 @@ if [ "$missing_whatsapp_login_status" -eq 0 ]; then
   exit 1
 fi
 grep -F "Channel whatsapp is not configured. Add channels.whatsapp to your config before logging in." /tmp/openclaw-missing-whatsapp-login.log >/dev/null
-node -e '"'"'
+node <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
 const config = JSON.parse(fs.readFileSync(path.join(process.env.HOME, ".openclaw", "openclaw.json"), "utf8"));
 if (config.channels?.whatsapp) {
   throw new Error("missing-config login unexpectedly created channels.whatsapp");
 }
-'"'"'
+NODE
 
 echo "Checking status surfaces for $CHANNEL..."
 openclaw channels status --json >/tmp/openclaw-channels-status.json 2>/tmp/openclaw-channels-status.err
