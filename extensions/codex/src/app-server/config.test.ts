@@ -924,6 +924,38 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
+  it("keeps normalized OpenClaw auto mode when legacy app-server yolo was schema-defaulted", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          command: "codex",
+          mode: "yolo",
+          transport: "stdio",
+          requestTimeoutMs: 60_000,
+          turnCompletionIdleTimeoutMs: 60_000,
+        },
+        codexDynamicToolsLoading: "searchable",
+        codexDynamicToolsExclude: [],
+      },
+      execMode: "auto",
+    });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      approvalsReviewer: "auto_review",
+    });
+    expectFields(runtime, "runtime start", {
+      start: {
+        transport: "stdio",
+        command: "codex",
+        commandSource: "config",
+        args: ["app-server", "--listen", "stdio://"],
+        headers: {},
+      },
+    });
+  });
+
   it("lets explicit app-server policy fields override normalized OpenClaw auto mode", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {
@@ -1366,6 +1398,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     };
     const appServerProperties = manifest.configSchema.properties.appServer.properties;
 
+    expect(appServerProperties.mode?.default).toBeUndefined();
     expect(appServerProperties.command?.default).toBeUndefined();
     expect(appServerProperties.approvalPolicy?.default).toBeUndefined();
     expect(appServerProperties.sandbox?.default).toBeUndefined();

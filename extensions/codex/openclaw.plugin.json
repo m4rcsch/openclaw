@@ -133,8 +133,7 @@
         "properties": {
           "mode": {
             "type": "string",
-            "enum": ["yolo", "guardian"],
-            "default": "yolo"
+            "enum": ["yolo", "guardian"]
           },
           "transport": {
             "type": "string",

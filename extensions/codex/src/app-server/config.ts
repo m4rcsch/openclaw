@@ -408,13 +408,15 @@ export function resolveCodexAppServerRuntimeOptions(
   const configuredSandbox =
     resolveSandbox(config.sandbox) ?? resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX);
   const normalizedPolicyMode = resolveCodexPolicyModeForOpenClawExecMode(execMode);
+  const ignoreLegacyYoloPolicyMode =
+    normalizedPolicyMode === "guardian" && explicitPolicyMode === "yolo";
   const forceUserReviewer = execMode !== undefined && execMode !== "auto" && execMode !== "full";
   const forceDangerFullAccessSandbox =
     params.execPolicy?.touched === true &&
     params.execPolicy.security === "full" &&
     params.execPolicy.ask !== "off";
   const defaultPolicy =
-    explicitPolicyMode && !forceUserReviewer
+    explicitPolicyMode && !forceUserReviewer && !ignoreLegacyYoloPolicyMode
       ? undefined
       : resolveDefaultCodexAppServerPolicy({
           transport,
@@ -440,7 +442,9 @@ export function resolveCodexAppServerRuntimeOptions(
           approvalsReviewer: defaultPolicy?.approvalsReviewer ?? "user",
         }
       : undefined;
-  const policyMode = explicitPolicyMode ?? normalizedPolicyMode ?? defaultPolicy?.mode ?? "yolo";
+  const policyMode = ignoreLegacyYoloPolicyMode
+    ? normalizedPolicyMode
+    : (explicitPolicyMode ?? normalizedPolicyMode ?? defaultPolicy?.mode ?? "yolo");
   const serviceTier = normalizeCodexServiceTier(config.serviceTier);
   if (transport === "websocket" && !url) {
     throw new Error(
