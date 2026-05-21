@@ -170,7 +170,8 @@ export function resolveExecDefaults(params: {
     elevatedRequested: false,
     sandboxAvailable,
   });
-  const approvalDefaults = loadExecApprovals().defaults;
+  const approvalDefaults =
+    resolved.effectiveHost === "sandbox" ? undefined : loadExecApprovals().defaults;
   const defaultSecurity = resolved.effectiveHost === "sandbox" ? "deny" : "full";
   const basePolicy: LayeredExecPolicy = {
     security: approvalDefaults?.security ?? defaultSecurity,

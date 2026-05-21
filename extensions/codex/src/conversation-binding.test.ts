@@ -773,16 +773,7 @@ describe("codex conversation binding", () => {
           },
         },
       },
-      {
-        timeoutMs: 50,
-        config: {
-          tools: {
-            exec: {
-              mode: "ask",
-            },
-          },
-        } as never,
-      },
+      { timeoutMs: 50 },
     );
 
     expect(result).toEqual({ handled: true, reply: { text: "done" } });
@@ -793,18 +784,14 @@ describe("codex conversation binding", () => {
     expect(turnStartParams[0]?.input).toEqual([
       { type: "text", text: "use the fallback prompt", text_elements: [] },
     ]);
-    expect(turnStartParams[0]?.approvalPolicy).toBe("on-request");
+    expect(turnStartParams[0]?.approvalPolicy).toBe("never");
     expect(turnStartParams[0]?.approvalsReviewer).toBe("user");
     expect(turnStartParams[0]?.sandboxPolicy).toEqual({
-      type: "workspaceWrite",
-      writableRoots: [tempDir],
-      networkAccess: false,
-      excludeTmpdirEnvVar: false,
-      excludeSlashTmp: false,
+      type: "dangerFullAccess",
     });
   });
 
-  it("honors current session exec mode over stored bound-thread policy", async () => {
+  it("fails closed when session exec mode needs unrouted user approvals", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const storePath = path.join(tempDir, "sessions.json");
     await fs.writeFile(
@@ -827,33 +814,16 @@ describe("codex conversation binding", () => {
         sandbox: "danger-full-access",
       }),
     );
-    let notificationHandler: ((notification: unknown) => void) | undefined;
     const turnStartParams: Record<string, unknown>[] = [];
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
       request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
         if (method === "turn/start") {
           turnStartParams.push(requestParams);
-          setImmediate(() =>
-            notificationHandler?.({
-              method: "turn/completed",
-              params: {
-                threadId: "thread-1",
-                turn: {
-                  id: "turn-1",
-                  status: "completed",
-                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
-                },
-              },
-            }),
-          );
           return { turn: { id: "turn-1" } };
         }
         throw new Error(`unexpected method: ${method}`);
       }),
-      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
-        notificationHandler = handler;
-        return () => undefined;
-      }),
+      addNotificationHandler: vi.fn(() => () => undefined),
       addRequestHandler: vi.fn(() => () => undefined),
     });
 
@@ -894,15 +864,10 @@ describe("codex conversation binding", () => {
       },
     );
 
-    expect(result).toEqual({ handled: true, reply: { text: "done" } });
-    expect(turnStartParams[0]?.approvalPolicy).toBe("on-request");
-    expect(turnStartParams[0]?.approvalsReviewer).toBe("user");
-    expect(turnStartParams[0]?.sandboxPolicy).toEqual({
-      type: "workspaceWrite",
-      writableRoots: [tempDir],
-      networkAccess: false,
-      excludeTmpdirEnvVar: false,
-      excludeSlashTmp: false,
-    });
+    expect(result?.handled).toBe(true);
+    expect(result?.reply?.text).toContain(
+      "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
+    );
+    expect(turnStartParams).toEqual([]);
   });
 });

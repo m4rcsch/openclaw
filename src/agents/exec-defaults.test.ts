@@ -118,6 +118,33 @@ describe("resolveExecDefaults", () => {
     expect(defaults.ask).toBe("off");
   });
 
+  it("ignores host approval defaults when auto resolves to sandbox", () => {
+    vi.mocked(execApprovals.loadExecApprovals).mockReturnValue({
+      version: 1,
+      defaults: {
+        security: "full",
+        ask: "always",
+      },
+      agents: {},
+    });
+
+    const defaults = resolveExecDefaults({
+      cfg: {
+        tools: {
+          exec: {
+            host: "auto",
+          },
+        },
+      },
+      sandboxAvailable: true,
+    });
+
+    expect(defaults.effectiveHost).toBe("sandbox");
+    expect(defaults.security).toBe("deny");
+    expect(defaults.ask).toBe("off");
+    expect(execApprovals.loadExecApprovals).not.toHaveBeenCalled();
+  });
+
   it("maps normalized auto mode to allowlist plus on-miss approvals", () => {
     expect(
       resolveExecDefaults({

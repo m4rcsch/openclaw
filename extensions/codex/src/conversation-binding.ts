@@ -19,6 +19,7 @@ import {
   resolveCodexAppServerRuntimeOptions,
   type CodexAppServerApprovalPolicy,
   type CodexAppServerSandboxMode,
+  type OpenClawExecPolicyForCodexAppServer,
 } from "./app-server/config.js";
 import {
   type CodexServiceTier,
@@ -54,6 +55,8 @@ import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
 import { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
+const NATIVE_CONVERSATION_INTERACTIVE_APPROVALS_UNAVAILABLE =
+  "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.";
 
 export {
   createCodexCliNodeConversationBindingData,
@@ -436,6 +439,7 @@ async function runBoundTurn(params: {
     pluginConfig: params.pluginConfig,
     execPolicy,
   });
+  assertNativeConversationApprovalPolicySupported({ execPolicy, runtime });
   const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir });
   const binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
   const threadId = binding?.threadId;
@@ -535,6 +539,19 @@ async function runBoundTurn(params: {
   } finally {
     notificationCleanup();
     requestCleanup();
+  }
+}
+
+function assertNativeConversationApprovalPolicySupported(params: {
+  execPolicy?: OpenClawExecPolicyForCodexAppServer;
+  runtime: ReturnType<typeof resolveCodexAppServerRuntimeOptions>;
+}): void {
+  if (
+    params.execPolicy?.touched === true &&
+    params.runtime.approvalPolicy !== "never" &&
+    params.runtime.approvalsReviewer === "user"
+  ) {
+    throw new Error(NATIVE_CONVERSATION_INTERACTIVE_APPROVALS_UNAVAILABLE);
   }
 }
 
