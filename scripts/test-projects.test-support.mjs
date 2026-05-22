@@ -323,6 +323,10 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map([
   ],
 ]);
 const TOOLING_SOURCE_TEST_TARGETS = new Map([
+  [
+    ".github/workflows/mantis-pr-desktop-lease.yml",
+    ["test/scripts/mantis-pr-desktop-lease-workflow.test.ts"],
+  ],
   ["scripts/github/barnacle-auto-response.mjs", ["test/scripts/barnacle-auto-response.test.ts"]],
   ["scripts/changed-lanes.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],

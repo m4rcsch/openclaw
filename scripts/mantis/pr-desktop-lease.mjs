@@ -98,6 +98,19 @@ async function main() {
   }
   if (action === "status") {
     const activeProvider = active.provider || provider;
+    if (active.inspection_error) {
+      postComment({
+        ...active,
+        status: "failed",
+        provider: activeProvider,
+        failed_step: "state lookup",
+        failure_excerpt: formatProcessFailure(
+          ["crabbox", ...inspectArgs(active.lease_id, activeProvider)],
+          active.inspection_error,
+        ),
+      });
+      return;
+    }
     const status = inspectLease(active.lease_id, activeProvider);
     if (status.status !== 0) {
       postComment({
@@ -122,6 +135,19 @@ async function main() {
   }
   if (action === "stop") {
     const activeProvider = active.provider || provider;
+    if (active.inspection_error) {
+      postComment({
+        ...active,
+        status: "failed",
+        provider: activeProvider,
+        failed_step: "state lookup",
+        failure_excerpt: formatProcessFailure(
+          ["crabbox", ...inspectArgs(active.lease_id, activeProvider)],
+          active.inspection_error,
+        ),
+      });
+      return;
+    }
     const stop = runCrabbox(["stop", "--provider", activeProvider, active.lease_id], {
       allowFailure: true,
     });
@@ -142,6 +168,19 @@ async function main() {
     return;
   }
   const activeProvider = active.provider || provider;
+  if (active.inspection_error) {
+    postComment({
+      ...active,
+      status: "failed",
+      provider: activeProvider,
+      failed_step: "state lookup",
+      failure_excerpt: formatProcessFailure(
+        ["crabbox", ...inspectArgs(active.lease_id, activeProvider)],
+        active.inspection_error,
+      ),
+    });
+    return;
+  }
   const reset = runCrabbox(
     [
       "webvnc",
@@ -192,8 +231,36 @@ async function lease(headSha) {
   const existing = findLatestActiveLease();
   if (existing?.lease_id) {
     const activeProvider = existing.provider || provider;
+    if (existing.inspection_error) {
+      postComment({
+        ...existing,
+        status: "failed",
+        provider: activeProvider,
+        failed_step: "existing-lease-inspect",
+        failure_excerpt: [
+          "Could not inspect the existing lease, so refusing to create a second shared desktop.",
+          formatProcessFailure(
+            ["crabbox", ...inspectArgs(existing.lease_id, activeProvider)],
+            existing.inspection_error,
+          ),
+        ].join("\n\n"),
+      });
+      return;
+    }
     if (leaseHeadMatches(headSha, existing.head_sha)) {
-      postComment({ ...existing, status: "already_active", provider: activeProvider });
+      try {
+        const readyExisting = await ensureExistingWebvncBridge(existing, activeProvider);
+        postComment({ ...readyExisting, status: "already_active", provider: activeProvider });
+        if (readyExisting.keep_workflow_alive) await keepWorkflowAliveForLease(readyExisting);
+      } catch (error) {
+        postComment({
+          ...existing,
+          status: "failed",
+          provider: activeProvider,
+          failed_step: "reuse-webvnc",
+          failure_excerpt: redactSensitiveText(error instanceof Error ? error.message : String(error)),
+        });
+      }
       return;
     }
     const stop = runCrabbox(["stop", "--provider", activeProvider, existing.lease_id], {
@@ -263,7 +330,7 @@ async function lease(headSha) {
       "--id",
       leaseID,
     ]);
-    await waitForWebvncReady(leaseID);
+    await waitForWebvncReady(leaseID, provider);
     const ready = {
       ...baseState,
       status: "ready",
@@ -302,11 +369,44 @@ async function keepWorkflowAliveForLease(state) {
   }
 }
 
-async function waitForWebvncReady(leaseID) {
+async function ensureExistingWebvncBridge(existing, activeProvider) {
+  const status = runCrabbox(webvncStatusArgs(existing.lease_id, activeProvider), {
+    allowFailure: true,
+  });
+  if (isWebvncReady(status)) {
+    return {
+      ...existing,
+      provider: activeProvider,
+      webvnc_bridge: "connected",
+      status_excerpt: status.stdout || status.stderr,
+    };
+  }
+  runCrabbox([
+    "webvnc",
+    "daemon",
+    "start",
+    "--provider",
+    activeProvider,
+    "--target",
+    targetForPlatform(platform),
+    "--id",
+    existing.lease_id,
+  ]);
+  const ready = await waitForWebvncReady(existing.lease_id, activeProvider);
+  return {
+    ...existing,
+    provider: activeProvider,
+    webvnc_bridge: "restarted",
+    status_excerpt: ready.stdout || ready.stderr,
+    keep_workflow_alive: true,
+  };
+}
+
+async function waitForWebvncReady(leaseID, leaseProvider = provider) {
   const deadline = Date.now() + WEBVNC_READY_TIMEOUT_MS;
   let last = null;
   while (Date.now() <= deadline) {
-    last = runCrabbox(webvncStatusArgs(leaseID), { allowFailure: true });
+    last = runCrabbox(webvncStatusArgs(leaseID, leaseProvider), { allowFailure: true });
     if (isWebvncReady(last)) return last;
     await new Promise((resolve) =>
       setTimeout(resolve, Math.min(WEBVNC_READY_POLL_MS, Math.max(0, deadline - Date.now()))),
@@ -323,12 +423,12 @@ async function waitForWebvncReady(leaseID) {
   );
 }
 
-function webvncStatusArgs(leaseID) {
+function webvncStatusArgs(leaseID, leaseProvider = provider) {
   return [
     "webvnc",
     "status",
     "--provider",
-    provider,
+    leaseProvider,
     "--target",
     targetForPlatform(platform),
     "--id",
@@ -543,10 +643,12 @@ function findLatestActiveLease() {
   if (!latest?.lease_id || latest.status === "stopped") return null;
   if (isExpiredCommentLease(latest)) return null;
   const inspect = inspectLease(latest.lease_id, latest.provider || provider);
-  if (!isActiveInspection(inspect)) return null;
+  const activity = inspectionActivity(inspect);
+  if (activity === "terminal") return null;
   return {
     ...latest,
     status_excerpt: inspect.stdout || inspect.stderr,
+    inspection_error: activity === "unknown" ? inspect : null,
   };
 }
 
@@ -574,22 +676,32 @@ function isExpiredCommentLease(lease) {
 }
 
 function isActiveInspection(result) {
-  if (result.status !== 0) return false;
+  return inspectionActivity(result) !== "terminal";
+}
+
+function inspectionActivity(result) {
   const text = `${result.stdout}\n${result.stderr}`.trim();
-  if (!text) return true;
-  try {
-    const parsed = JSON.parse(text);
-    const state = normalizeLeaseState(
-      parsed?.state ?? parsed?.State ?? parsed?.status ?? parsed?.Status,
-    );
-    if (state && TERMINAL_LEASE_STATES.has(state)) return false;
-    return true;
-  } catch {
-    // Human-readable inspect output is still useful for broad terminal-state matching.
+  if (text) {
+    try {
+      const parsed = JSON.parse(text);
+      const state = normalizeLeaseState(
+        parsed?.state ?? parsed?.State ?? parsed?.status ?? parsed?.Status,
+      );
+      if (state && TERMINAL_LEASE_STATES.has(state)) return "terminal";
+      if (result.status === 0) return "active";
+    } catch {
+      // Human-readable inspect output is still useful for broad terminal-state matching.
+    }
+    if (
+      /\b(stopped(?:[-_ ]with[-_ ]code)?|terminated|expired|deleted|not[-_ ]?found|released|404)\b/i.test(
+        text,
+      )
+    ) {
+      return "terminal";
+    }
   }
-  return !/\b(stopped(?:[-_ ]with[-_ ]code)?|terminated|expired|deleted|not[-_ ]?found|failed|released)\b/i.test(
-    text,
-  );
+  if (result.status !== 0) return "unknown";
+  return "active";
 }
 
 function isWebvncReady(result) {

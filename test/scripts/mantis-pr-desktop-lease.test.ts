@@ -107,10 +107,14 @@ process.exit(2);
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.CALLS_PATH, JSON.stringify({ tool: "crabbox", args }) + "\\n");
-	if (args[0] === "inspect") {
-	  console.log(process.env.INSPECT_STDOUT || JSON.stringify({ state: "active", status: "running" }));
-	  process.exit(0);
-	}
+		if (args[0] === "inspect") {
+		  if (process.env.INSPECT_STATUS) {
+		    console.error(process.env.INSPECT_STDERR || "inspect failed");
+		    process.exit(Number(process.env.INSPECT_STATUS));
+		  }
+		  console.log(process.env.INSPECT_STDOUT || JSON.stringify({ state: "active", status: "running" }));
+		  process.exit(0);
+		}
 	if (args[0] === "warmup") {
 	  if (process.env.WARMUP_STATUS) {
 	    console.error("warmup failed");
@@ -123,10 +127,18 @@ fs.appendFileSync(process.env.CALLS_PATH, JSON.stringify({ tool: "crabbox", args
 	  console.error("stop failed");
 	  process.exit(Number(process.env.STOP_STATUS));
 	}
-	if (args[0] === "webvnc" && args[1] === "status") {
-	  console.log(process.env.WEBVNC_STATUS_STDOUT || "portal bridge: connected=true viewers=0 observers=0 slots=2");
-	  process.exit(0);
-	}
+		if (args[0] === "webvnc" && args[1] === "status") {
+		  const sequence = process.env.WEBVNC_STATUS_STDOUTS ? JSON.parse(process.env.WEBVNC_STATUS_STDOUTS) : null;
+		  if (sequence) {
+		    const countPath = process.env.WEBVNC_STATUS_COUNT_PATH;
+		    const count = fs.existsSync(countPath) ? Number(fs.readFileSync(countPath, "utf8")) : 0;
+		    fs.writeFileSync(countPath, String(count + 1));
+		    console.log(sequence[Math.min(count, sequence.length - 1)]);
+		  } else {
+		    console.log(process.env.WEBVNC_STATUS_STDOUT || "portal bridge: connected=true viewers=0 observers=0 slots=2");
+		  }
+		  process.exit(0);
+		}
 process.exit(0);
 `,
   );
@@ -147,6 +159,7 @@ process.exit(0);
       PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
       PR_COMMENTS: JSON.stringify(normalizeCommentsPayload(comments)),
       PR_HEAD_SHA: currentHead,
+      WEBVNC_STATUS_COUNT_PATH: path.join(dir, "webvnc-status-count"),
       ...env,
     },
   });
@@ -329,6 +342,71 @@ describe("scripts/mantis/pr-desktop-lease", () => {
     expect(commentBody).not.toContain("already active");
   });
 
+  it("replaces leases when non-zero inspect output reports not found", () => {
+    const deletedComment = [
+      "<!-- mantis-pr-desktop-lease:openclaw/openclaw:85136:linux -->",
+      "- Platform: `linux`",
+      "- Provider: `azure`",
+      "- Lease: `cbx_deleted`",
+      "- Expires: `2999-01-01T00:00:00.000Z`",
+      "Portal: https://crabbox.example.test/portal/leases/cbx_deleted",
+    ].join("\n");
+
+    const { calls, commentBody, result } = runLeaseScript(
+      {
+        action: "lease",
+        head_sha: currentHead,
+        item_number: "85136",
+        platform: "linux",
+        provider: "aws",
+        target_repo: "openclaw/openclaw",
+      },
+      [deletedComment],
+      { INSPECT_STATUS: "6", INSPECT_STDERR: "404 not_found" },
+    );
+
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(calls).toContainEqual(
+      expect.objectContaining({
+        tool: "crabbox",
+        args: expect.arrayContaining(["warmup", "--provider", "aws"]),
+      }),
+    );
+    expect(commentBody).toContain("- Lease: `cbx_test123`");
+  });
+
+  it("does not create a replacement lease when existing lease inspection fails", () => {
+    const activeComment = [
+      "<!-- mantis-pr-desktop-lease:openclaw/openclaw:85136:linux -->",
+      "- Platform: `linux`",
+      "- Provider: `azure`",
+      "- Lease: `cbx_active`",
+      "- Expires: `2999-01-01T00:00:00.000Z`",
+      `- PR code: \`openclaw/openclaw#85136\` at \`${staleHead.slice(0, 12)}\``,
+      "Portal: https://crabbox.example.test/portal/leases/cbx_active",
+    ].join("\n");
+
+    const { calls, commentBody, result } = runLeaseScript(
+      {
+        action: "lease",
+        head_sha: currentHead,
+        item_number: "85136",
+        platform: "linux",
+        provider: "aws",
+        target_repo: "openclaw/openclaw",
+      },
+      [activeComment],
+      { INSPECT_STATUS: "6", INSPECT_STDERR: "inspect failed: coordinator unavailable" },
+    );
+
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(calls.some((call) => call.tool === "crabbox" && call.args[0] === "warmup")).toBe(false);
+    expect(commentBody).toContain("Could not inspect the existing lease");
+    expect(commentBody).toContain("inspect failed: coordinator unavailable");
+  });
+
   it("replaces active leases from an older PR head", () => {
     const staleComment = [
       "<!-- mantis-pr-desktop-lease:openclaw/openclaw:85136:linux -->",
@@ -367,6 +445,100 @@ describe("scripts/mantis/pr-desktop-lease", () => {
     expect(commentBody).toContain("- Lease: `cbx_test123`");
     expect(commentBody).toContain(currentHead.slice(0, 12));
     expect(commentBody).not.toContain("already active");
+  });
+
+  it("restarts WebVNC before reusing an active same-head lease", () => {
+    const activeComment = [
+      "<!-- mantis-pr-desktop-lease:openclaw/openclaw:85136:linux -->",
+      "- Platform: `linux`",
+      "- Provider: `azure`",
+      "- Lease: `cbx_active`",
+      "- Expires: `2999-01-01T00:00:00.000Z`",
+      `- PR code: \`openclaw/openclaw#85136\` at \`${currentHead.slice(0, 12)}\``,
+      "Portal: https://crabbox.example.test/portal/leases/cbx_active",
+    ].join("\n");
+
+    const { calls, commentBody, result } = runLeaseScript(
+      {
+        action: "lease",
+        head_sha: currentHead,
+        item_number: "85136",
+        platform: "linux",
+        provider: "aws",
+        target_repo: "openclaw/openclaw",
+      },
+      [activeComment],
+      {
+        WEBVNC_STATUS_STDOUTS: JSON.stringify([
+          "portal bridge: connected=false viewers=0 observers=0 slots=2",
+          "portal bridge: connected=true viewers=0 observers=0 slots=2",
+        ]),
+      },
+    );
+
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(calls).toContainEqual({
+      tool: "crabbox",
+      args: [
+        "webvnc",
+        "daemon",
+        "start",
+        "--provider",
+        "azure",
+        "--target",
+        "linux",
+        "--id",
+        "cbx_active",
+      ],
+    });
+    expect(calls.some((call) => call.tool === "crabbox" && call.args[0] === "warmup")).toBe(false);
+    expect(commentBody).toContain("- Lease: `cbx_active`");
+    expect(commentBody).toContain("already active");
+  });
+
+  it("comments instead of throwing when same-head WebVNC restart fails", () => {
+    const activeComment = [
+      "<!-- mantis-pr-desktop-lease:openclaw/openclaw:85136:linux -->",
+      "- Platform: `linux`",
+      "- Provider: `azure`",
+      "- Lease: `cbx_active`",
+      "- Expires: `2999-01-01T00:00:00.000Z`",
+      `- PR code: \`openclaw/openclaw#85136\` at \`${currentHead.slice(0, 12)}\``,
+      "Portal: https://crabbox.example.test/portal/leases/cbx_active",
+    ].join("\n");
+
+    const { calls, commentBody, result } = runLeaseScript(
+      {
+        action: "lease",
+        head_sha: currentHead,
+        item_number: "85136",
+        platform: "linux",
+        provider: "aws",
+        target_repo: "openclaw/openclaw",
+      },
+      [activeComment],
+      { WEBVNC_STATUS_STDOUT: "portal bridge: connected=false viewers=0 observers=0 slots=2" },
+    );
+
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(calls).toContainEqual({
+      tool: "crabbox",
+      args: [
+        "webvnc",
+        "daemon",
+        "start",
+        "--provider",
+        "azure",
+        "--target",
+        "linux",
+        "--id",
+        "cbx_active",
+      ],
+    });
+    expect(commentBody).toContain("- Failed step: `reuse-webvnc`");
+    expect(commentBody).toContain("portal bridge connected=true");
   });
 
   it("marks the stale lease stopped before risky replacement warmup", () => {

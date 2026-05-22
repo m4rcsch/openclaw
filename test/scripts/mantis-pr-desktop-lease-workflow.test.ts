@@ -13,6 +13,12 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  concurrency?: {
+    "cancel-in-progress"?: boolean;
+    group?: string;
+  };
+  needs?: string | string[];
+  outputs?: Record<string, string>;
   steps?: WorkflowStep[];
 };
 
@@ -69,10 +75,17 @@ describe("Mantis PR desktop lease workflow", () => {
   });
 
   it("does not queue new-head lease replacement behind the live bridge job", () => {
+    const workflow = readWorkflow();
     const text = readFileSync(WORKFLOW, "utf8");
+    const leaseJob = workflow.jobs?.["pr-desktop-lease"];
 
-    expect(text).toContain("github.event.inputs.head_sha || github.event.client_payload.head_sha");
-    expect(text).toContain("github.event.client_payload.head_sha || 'lease'");
-    expect(text).toContain("cancel-in-progress: false");
+    expect(leaseJob?.needs).toEqual(["authorize_actor", "resolve_lease_key"]);
+    expect(leaseJob?.concurrency?.group).toBe("${{ needs.resolve_lease_key.outputs.group }}");
+    expect(leaseJob?.concurrency?.["cancel-in-progress"]).toBe(false);
+    expect(text).toContain('head_sha="$(gh pr view "$pr_number"');
+    expect(text).toContain('CLIENT_HEAD_SHA: ${{ github.event.client_payload.head_sha }}');
+    expect(text).toContain('head_sha="${INPUT_HEAD_SHA:-${CLIENT_HEAD_SHA:-}}"');
+    expect(text).toContain('key_tail="${head_sha:-$RUN_ID}"');
+    expect(text).not.toContain('target_repo="${INPUT_TARGET_REPO:-${{ github.event.client_payload');
   });
 });

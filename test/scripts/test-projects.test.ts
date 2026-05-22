@@ -651,6 +651,15 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes Mantis PR desktop lease workflow edits to the workflow regression test", () => {
+    expect(
+      resolveChangedTestTargetPlan([".github/workflows/mantis-pr-desktop-lease.yml"]),
+    ).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/mantis-pr-desktop-lease-workflow.test.ts"],
+    });
+  });
+
   it("routes ACP command source files to ACP command regression tests", () => {
     expect(
       resolveChangedTestTargetPlan([
