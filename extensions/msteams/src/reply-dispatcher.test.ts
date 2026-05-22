@@ -559,8 +559,8 @@ describe("createMSTeamsReplyDispatcher", () => {
 
 describe("pickInformativeStatusText", () => {
   it("selects a deterministic status line for a fixed random source", () => {
-    expect(pickInformativeStatusText(() => 0)).toBe("Thinking...");
-    expect(pickInformativeStatusText(() => 0.99)).toBe("Surfacing...");
+    expect(pickInformativeStatusText(() => 0)).toBe("Working");
+    expect(pickInformativeStatusText(() => 0.99)).toBe("Surfacing");
   });
 
   it("honors disabled progress labels", () => {

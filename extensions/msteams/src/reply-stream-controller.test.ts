@@ -256,7 +256,7 @@ describe("createTeamsReplyStreamController", () => {
     await ctrl.pushProgressLine("tool: search");
     await ctrl.pushProgressLine("tool: exec");
 
-    expect(stream.update).toHaveBeenLastCalledWith("Working\n- tool: search\n- tool: exec");
+    expect(stream.update).toHaveBeenLastCalledWith("Working\n\n- tool: search\n- tool: exec");
   });
 
   it("suppresses block delivery when progress final text is emitted to the stream", () => {

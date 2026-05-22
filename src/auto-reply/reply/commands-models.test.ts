@@ -42,6 +42,9 @@ vi.mock("../../agents/model-provider-auth.js", () => ({
   createProviderAuthChecker: modelProviderAuthMocks.createProviderAuthChecker,
   hasAuthForModelProvider: ({ provider }: { provider: string }) =>
     modelProviderAuthMocks.authenticatedProviders.has(provider),
+  getCurrentProviderAuthState: () => null,
+  clearCurrentProviderAuthState: () => undefined,
+  warmCurrentProviderAuthState: async () => undefined,
 }));
 
 const telegramModelsTestPlugin: ChannelPlugin = {
@@ -656,6 +659,34 @@ describe("handleModelsCommand", () => {
       .calls as unknown as Array<[{ provider?: string; workspaceDir?: string }]>;
     expect(authLabelParams.provider).toBe("anthropic");
     expect(authLabelParams.workspaceDir).toBe("/tmp");
+  });
+
+  it("labels OpenAI provider pages with the effective Codex auth provider set", async () => {
+    modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(
+      "oauth (openai-codex:user@example.com)",
+    );
+
+    const result = await handleModelsCommand(
+      buildParams("/models openai", {
+        auth: {
+          order: {
+            openai: ["openai-codex:user@example.com"],
+          },
+        },
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain(
+      "Models (openai · 🔑 oauth (openai-codex:user@example.com))",
+    );
+    const openaiAuthCall = modelAuthLabelMocks.resolveModelAuthLabel.mock.calls.find(
+      ([params]) => (params as { provider?: string }).provider === "openai",
+    );
+    expect(openaiAuthCall?.[0]).toMatchObject({
+      provider: "openai",
+      acceptedProviderIds: ["openai-codex"],
+    });
   });
 
   it("uses spawned workspace for direct /models provider visibility", async () => {

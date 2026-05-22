@@ -104,11 +104,32 @@ describe("install.ps1 failure handling", () => {
     );
   });
 
+  it("rejects OpenClaw GitHub source targets for npm installs", () => {
+    const npmInstallBody = extractFunctionBody(source, "Install-OpenClaw");
+    const sourceTargetBody = extractFunctionBody(source, "Test-OpenClawSourcePackageInstallSpec");
+    expect(sourceTargetBody).toContain('$normalizedTag -eq "main"');
+    expect(sourceTargetBody).toContain("^github:openclaw/openclaw");
+    expect(npmInstallBody).toContain("Test-OpenClawSourcePackageInstallSpec -RequestedTag $Tag");
+    expect(npmInstallBody).toContain("npm installs do not support OpenClaw GitHub source targets");
+    expect(npmInstallBody).toContain("-InstallMethod git -Tag main");
+  });
+
   it("cleans legacy git submodules only from the selected git checkout", () => {
     const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
     const mainBody = extractFunctionBody(source, "Main");
     expect(gitInstallBody).toContain("Remove-LegacySubmodule -RepoDir $RepoDir");
     expect(mainBody).not.toContain("Remove-LegacySubmodule");
+  });
+
+  it("launches interactive onboarding outside Main's captured output", () => {
+    const interactiveCommandBody = extractFunctionBody(source, "Invoke-InteractiveOpenClawCommand");
+    const mainBody = extractFunctionBody(source, "Main");
+    expect(interactiveCommandBody).toContain("Start-Process");
+    expect(interactiveCommandBody).toContain("-NoNewWindow");
+    expect(interactiveCommandBody).toContain("-Wait");
+    expect(interactiveCommandBody).toContain("-PassThru");
+    expect(mainBody).toContain('Write-Host "Starting setup..." -ForegroundColor Cyan');
+    expect(mainBody).toContain("Invoke-InteractiveOpenClawCommand onboard");
   });
 
   runIfPowerShell("exits non-zero when run as a script file", () => {

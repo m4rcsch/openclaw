@@ -79,6 +79,7 @@ export function isExplicitPackageInstallSpec(value: string): boolean {
     return false;
   }
   return (
+    /\.(?:tgz|tar\.gz)$/iu.test(trimmed) ||
     trimmed.includes("://") ||
     trimmed.includes("#") ||
     /^(?:file|github|git\+ssh|git\+https|git\+http|git\+file|npm):/i.test(trimmed)
@@ -88,7 +89,30 @@ export function isExplicitPackageInstallSpec(value: string): boolean {
 function stripPrimaryPackageAlias(spec: string): string {
   const normalized = normalizePackageTarget(spec);
   const prefix = `${PRIMARY_PACKAGE_NAME}@`;
-  return normalized.startsWith(prefix) ? normalized.slice(prefix.length).trim() : normalized;
+  return normalized.toLowerCase().startsWith(prefix)
+    ? normalized.slice(prefix.length).trim()
+    : normalized;
+}
+
+export function isOpenClawSourcePackageInstallSpec(value: string): boolean {
+  if (isMainPackageTarget(value)) {
+    return true;
+  }
+  const target = stripPrimaryPackageAlias(value);
+  const normalizedTarget = normalizeLowercaseStringOrEmpty(target);
+  if (!normalizedTarget) {
+    return false;
+  }
+  if (/^github:openclaw\/openclaw(?:$|[#/])/u.test(normalizedTarget)) {
+    return true;
+  }
+  const gitUrl = normalizedTarget.replace(/^git\+/u, "");
+  return (
+    /^https?:\/\/github\.com\/openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl) ||
+    /^ssh:\/\/git@github\.com[:/]openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl) ||
+    /^git:\/\/github\.com\/openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl) ||
+    /^git@github\.com:openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl)
+  );
 }
 
 function isPnpmOpenClawSourceInstallSpec(spec: string): boolean {
@@ -793,7 +817,9 @@ export function globalInstallArgs(
     ...(installPrefix ? ["--prefix", installPrefix] : []),
     spec,
     ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
-    ...createNpmFreshnessBypassArgs(),
+    ...createNpmFreshnessBypassArgs(process.env, new Date(), {
+      npmConfigPrefix: installPrefix,
+    }),
   ];
 }
 
@@ -815,7 +841,9 @@ export function globalInstallFallbackArgs(
     spec,
     "--omit=optional",
     ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
-    ...createNpmFreshnessBypassArgs(),
+    ...createNpmFreshnessBypassArgs(process.env, new Date(), {
+      npmConfigPrefix: installPrefix,
+    }),
   ];
 }
 

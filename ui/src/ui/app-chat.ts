@@ -35,6 +35,7 @@ import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
+import { isSessionRunActive } from "./session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -84,7 +85,8 @@ export type ChatAbortOptions = {
   preserveDraft?: boolean;
 };
 
-export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+// Chat pickers need recency-free session rows so older channel chats remain selectable.
+export const CHAT_SESSIONS_ACTIVE_MINUTES = 0;
 export const CHAT_SESSIONS_REFRESH_LIMIT = 100;
 export {
   handleChatDraftChange,
@@ -108,7 +110,7 @@ export function hasAbortableSessionRun(host: {
   }
   return Boolean(
     host.sessionsResult?.sessions.some(
-      (session) => session.key === host.sessionKey && session.hasActiveRun === true,
+      (session) => session.key === host.sessionKey && isSessionRunActive(session),
     ),
   );
 }
@@ -783,7 +785,6 @@ export async function refreshChat(
       limit: CHAT_SESSIONS_REFRESH_LIMIT,
       includeGlobal: true,
       includeUnknown: true,
-      agentId: resolveAgentIdForSession(host) ?? undefined,
     }),
     refreshChatAvatar(host),
     refreshChatModels(host),
