@@ -132,6 +132,8 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
 };
 
+type MutableFileOperandSnapshotResult = ReturnType<typeof resolveMutableFileOperandSnapshotSync>;
+
 const safeBinTrustedDirWarningCache = new Set<string>();
 const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval cwd changed before execution";
@@ -309,6 +311,46 @@ async function sendSystemRunCompleted(
   await opts.sendInvokeResult({
     ok: true,
     payloadJSON,
+  });
+}
+
+function resolveUnplannedMutableFileOperandSnapshot(params: {
+  argv: string[];
+  cwd: string | undefined;
+  shellPayload: string | null;
+}): MutableFileOperandSnapshotResult | null {
+  const snapshot = resolveMutableFileOperandSnapshotSync({
+    argv: params.argv,
+    cwd: params.cwd,
+    shellCommand: params.shellPayload,
+  });
+  if (!snapshot.ok) {
+    return params.shellPayload === null ? null : snapshot;
+  }
+  return snapshot.snapshot ? snapshot : null;
+}
+
+function resolveExpectedMutableFileOperandSnapshot(
+  phase: SystemRunPolicyPhase,
+): MutableFileOperandSnapshotResult | null {
+  if (phase.approvalPlan || phase.approvalDecision === "allow-once") {
+    return resolveMutableFileOperandSnapshotSync({
+      argv: phase.argv,
+      cwd: phase.cwd,
+      shellCommand: phase.shellPayload,
+    });
+  }
+  if (
+    phase.inlineEvalHit !== null ||
+    phase.policy.approvedByAsk ||
+    (phase.security === "full" && phase.ask === "off")
+  ) {
+    return null;
+  }
+  return resolveUnplannedMutableFileOperandSnapshot({
+    argv: phase.argv,
+    cwd: phase.cwd,
+    shellPayload: phase.shellPayload,
   });
 }
 
@@ -716,21 +758,7 @@ async function executeSystemRunPhase(
     });
     return;
   }
-  const requiresUnplannedMutableFileApproval =
-    phase.inlineEvalHit === null &&
-    !phase.policy.approvedByAsk &&
-    !phase.durableApprovalSatisfied &&
-    !(phase.security === "full" && phase.ask === "off");
-  const expectedMutableFileOperand =
-    phase.approvalPlan ||
-    phase.approvalDecision === "allow-once" ||
-    requiresUnplannedMutableFileApproval
-      ? resolveMutableFileOperandSnapshotSync({
-          argv: phase.argv,
-          cwd: phase.cwd,
-          shellCommand: phase.shellPayload,
-        })
-      : null;
+  const expectedMutableFileOperand = resolveExpectedMutableFileOperandSnapshot(phase);
   if (expectedMutableFileOperand && !expectedMutableFileOperand.ok) {
     logWarn(`security: system.run approval script binding blocked (runId=${phase.runId})`);
     await sendSystemRunDenied(opts, phase.execution, {

@@ -993,6 +993,57 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 
+  it("requires mutable script binding for durable exact system.run approvals", async () => {
+    const tmp = createFixtureDir("openclaw-system-run-durable-script-binding-");
+    const scriptPath = path.join(tmp, "read-info.js");
+    fs.writeFileSync(scriptPath, 'console.log("durable");\n');
+    const prepared = buildSystemRunApprovalPlan({
+      command: [process.execPath, scriptPath],
+      cwd: tmp,
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) {
+      throw new Error("unreachable");
+    }
+
+    await withTempApprovalsHome({
+      approvals: createAllowlistOnMissApprovals({
+        agents: {
+          main: {
+            allowlist: [
+              {
+                pattern: `=command:${crypto
+                  .createHash("sha256")
+                  .update(prepared.plan.commandText)
+                  .digest("hex")
+                  .slice(0, 16)}`,
+                source: "allow-always",
+              },
+            ],
+          },
+        },
+      }),
+      run: async () => {
+        const runCommand = vi.fn(async () => createLocalRunResult("should-not-run"));
+        const invoke = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: prepared.plan.argv,
+          rawCommand: prepared.plan.commandText,
+          cwd: prepared.plan.cwd ?? tmp,
+          runCommand,
+          security: "allowlist",
+          ask: "on-miss",
+        });
+
+        expect(runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(invoke.sendInvokeResult, {
+          message: "SYSTEM_RUN_DENIED: approval missing script operand binding",
+          exact: true,
+        });
+      },
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "requires mutable script binding for allowlisted shell-wrapped system.run commands",
     async () => {
