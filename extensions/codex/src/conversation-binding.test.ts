@@ -19,6 +19,35 @@ const agentRuntimeMocks = vi.hoisted(() => ({
   saveAuthProfileStore: vi.fn(),
 }));
 
+const codexRequirementsTomlMock = vi.hoisted(() => vi.fn<() => string | undefined>());
+const resolveSandboxContextMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => Promise<{ enabled: boolean } | null>>(async () => null),
+);
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    readFileSync(filePath: string | URL | number, options?: BufferEncoding | object | null) {
+      if (filePath === "/etc/codex/requirements.toml") {
+        const content = codexRequirementsTomlMock();
+        if (content !== undefined) {
+          return content;
+        }
+      }
+      return actual.readFileSync(filePath, options);
+    },
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  return {
+    ...actual,
+    resolveSandboxContext: resolveSandboxContextMock,
+  };
+});
+
 vi.mock("./app-server/shared-client.js", () => sharedClientMocks);
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => agentRuntimeMocks);
 
@@ -54,6 +83,9 @@ describe("codex conversation binding", () => {
     agentRuntimeMocks.resolveProviderIdForAuth.mockClear();
     agentRuntimeMocks.resolveSessionAgentIds.mockClear();
     agentRuntimeMocks.saveAuthProfileStore.mockReset();
+    codexRequirementsTomlMock.mockReset();
+    resolveSandboxContextMock.mockReset();
+    resolveSandboxContextMock.mockResolvedValue(null);
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -743,6 +775,119 @@ describe("codex conversation binding", () => {
     expect(requests[1]?.params.sandbox).toBe("workspace-write");
     expect(requests[2]?.method).toBe("turn/start");
     expect(requests[2]?.params.approvalPolicy).toBe("on-request");
+  });
+
+  it("passes sandbox state when resolving bound turn policy", async () => {
+    codexRequirementsTomlMock.mockReturnValue(
+      [
+        'allowed_sandbox_modes = ["read-only", "workspace-write"]',
+        'allowed_approval_policies = ["never", "on-request"]',
+        'allowed_approvals_reviewers = ["user"]',
+      ].join("\n"),
+    );
+    resolveSandboxContextMock.mockResolvedValue({ enabled: true });
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      }),
+    );
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    const turnStartParams: Record<string, unknown>[] = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        if (method === "turn/start") {
+          turnStartParams.push(requestParams);
+          setImmediate(() =>
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
+                },
+              },
+            }),
+          );
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue",
+        bodyForAgent: "continue",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+        sessionKey: "agent:main:session-1",
+      },
+      {
+        channelId: "telegram",
+        sessionKey: "agent:main:session-1",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      {
+        timeoutMs: 50,
+        config: {
+          tools: {
+            exec: {
+              security: "full",
+              ask: "on-miss",
+            },
+          },
+        } as never,
+      },
+    );
+
+    expect(result?.handled).toBe(true);
+    expect(result?.reply?.text).toContain(
+      "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
+    );
+    expect(result?.reply?.text).not.toContain(
+      "legacy full exec security with ask requires Codex app-server danger-full-access",
+    );
+    expect(resolveSandboxContextMock).toHaveBeenCalledWith({
+      config: {
+        tools: {
+          exec: {
+            security: "full",
+            ask: "on-miss",
+          },
+        },
+      },
+      sessionKey: "agent:main:session-1",
+      workspaceDir: tempDir,
+    });
+    expect(turnStartParams).toEqual([]);
   });
 
   it("returns a clean failure reply when app-server turn start rejects", async () => {

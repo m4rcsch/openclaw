@@ -1,4 +1,7 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  formatErrorMessage,
+  resolveSandboxContext,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import type {
@@ -104,6 +107,39 @@ type CodexConversationConfig = Parameters<
 type CodexConversationGlobalState = {
   queues: Map<string, Promise<void>>;
 };
+
+async function resolveConversationAppServerRuntime(params: {
+  pluginConfig?: unknown;
+  config?: CodexConversationConfig;
+  agentId?: string;
+  sessionKey?: string;
+  workspaceDir: string;
+}): Promise<{
+  execPolicy?: OpenClawExecPolicyForCodexAppServer;
+  runtime: ReturnType<typeof resolveCodexAppServerRuntimeOptions>;
+}> {
+  const execPolicy = resolveConversationExecPolicy({
+    config: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  const sandboxForPolicy =
+    execPolicy?.touched === true && execPolicy.security === "full" && execPolicy.ask !== "off"
+      ? await resolveSandboxContext({
+          config: params.config,
+          sessionKey: params.sessionKey,
+          workspaceDir: params.workspaceDir,
+        })
+      : undefined;
+  return {
+    execPolicy,
+    runtime: resolveCodexAppServerRuntimeOptions({
+      pluginConfig: params.pluginConfig,
+      execPolicy,
+      openClawSandboxActive: sandboxForPolicy?.enabled === true,
+    }),
+  };
+}
 
 const CODEX_CONVERSATION_GLOBAL_STATE = Symbol.for("openclaw.codex.conversationBinding");
 
@@ -284,13 +320,12 @@ async function attachExistingThread(params: {
   agentId?: string;
   sessionKey?: string;
 }): Promise<void> {
-  const runtime = resolveCodexAppServerRuntimeOptions({
+  const { runtime } = await resolveConversationAppServerRuntime({
     pluginConfig: params.pluginConfig,
-    execPolicy: resolveConversationExecPolicy({
-      config: params.config,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-    }),
+    config: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    workspaceDir: params.workspaceDir,
   });
   const agentLookup = buildAgentLookup({ agentDir: params.agentDir, config: params.config });
   const modelProvider = resolveThreadRequestModelProvider({
@@ -360,13 +395,12 @@ async function createThread(params: {
   agentId?: string;
   sessionKey?: string;
 }): Promise<void> {
-  const runtime = resolveCodexAppServerRuntimeOptions({
+  const { runtime } = await resolveConversationAppServerRuntime({
     pluginConfig: params.pluginConfig,
-    execPolicy: resolveConversationExecPolicy({
-      config: params.config,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-    }),
+    config: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    workspaceDir: params.workspaceDir,
   });
   const agentLookup = buildAgentLookup({ agentDir: params.agentDir, config: params.config });
   const modelProvider = resolveThreadRequestModelProvider({
@@ -432,21 +466,20 @@ async function runBoundTurn(params: {
   sessionKey?: string;
   timeoutMs?: number;
 }): Promise<BoundTurnResult> {
-  const execPolicy = resolveConversationExecPolicy({
-    config: params.config,
-    sessionKey: params.sessionKey,
-  });
-  const runtime = resolveCodexAppServerRuntimeOptions({
-    pluginConfig: params.pluginConfig,
-    execPolicy,
-  });
-  assertNativeConversationApprovalPolicySupported({ execPolicy, runtime });
   const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir, config: params.config });
   const binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
   const threadId = binding?.threadId;
   if (!threadId) {
     throw new Error("bound Codex conversation has no thread binding");
   }
+  const workspaceDir = binding.cwd || params.data.workspaceDir;
+  const { execPolicy, runtime } = await resolveConversationAppServerRuntime({
+    pluginConfig: params.pluginConfig,
+    config: params.config,
+    sessionKey: params.sessionKey,
+    workspaceDir,
+  });
+  assertNativeConversationApprovalPolicySupported({ execPolicy, runtime });
 
   const client = await getSharedCodexAppServerClient({
     startOptions: runtime.start,
@@ -503,14 +536,14 @@ async function runBoundTurn(params: {
           prompt: params.prompt,
           event: params.event,
         }),
-        cwd: binding.cwd || params.data.workspaceDir,
+        cwd: workspaceDir,
         approvalPolicy: execPolicy?.touched
           ? runtime.approvalPolicy
           : (binding.approvalPolicy ?? runtime.approvalPolicy),
         approvalsReviewer: runtime.approvalsReviewer,
         sandboxPolicy: codexSandboxPolicyForTurn(
           execPolicy?.touched ? runtime.sandbox : (binding.sandbox ?? runtime.sandbox),
-          binding.cwd || params.data.workspaceDir,
+          workspaceDir,
         ),
         ...(binding.model ? { model: binding.model } : {}),
         ...((binding.serviceTier ?? runtime.serviceTier)
