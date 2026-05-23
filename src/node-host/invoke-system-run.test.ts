@@ -747,6 +747,90 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "preserves read-only security audit suppression inspection through shell transport",
+    async () => {
+      const tmp = createFixtureDir("openclaw-system-run-readonly-suppression-wrapper-");
+      setRuntimeConfigSnapshot({
+        tools: {
+          exec: {
+            security: "full",
+            ask: "on-miss",
+          },
+        },
+      });
+      saveExecApprovals({
+        version: 1,
+        defaults: {
+          security: "full",
+          ask: "on-miss",
+          askFallback: "deny",
+        },
+        agents: {},
+      });
+      try {
+        const runCommand = vi.fn(async () => createLocalRunResult("read-only-ok"));
+        const invoke = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: ["/bin/sh", "-lc", "openclaw config get security.audit.suppressions"],
+          cwd: tmp,
+          runCommand,
+          resolveExecSecurity: resolveProductionExecSecurity,
+          resolveExecAsk: resolveProductionExecAsk,
+        });
+
+        expect(runCommand).toHaveBeenCalledTimes(1);
+        expectInvokeOk(invoke.sendInvokeResult, { payloadContains: "read-only-ok" });
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "requires explicit approval for security audit suppression edits through shell transport",
+    async () => {
+      const tmp = createFixtureDir("openclaw-system-run-suppression-edit-wrapper-");
+      setRuntimeConfigSnapshot({
+        tools: {
+          exec: {
+            security: "full",
+            ask: "on-miss",
+          },
+        },
+      });
+      saveExecApprovals({
+        version: 1,
+        defaults: {
+          security: "full",
+          ask: "on-miss",
+          askFallback: "deny",
+        },
+        agents: {},
+      });
+      try {
+        const runCommand = vi.fn(async () => createLocalRunResult("should-not-run"));
+        const invoke = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: ["/bin/sh", "-lc", "openclaw config set security.audit.suppressions '[]'"],
+          cwd: tmp,
+          runCommand,
+          resolveExecSecurity: resolveProductionExecSecurity,
+          resolveExecAsk: resolveProductionExecAsk,
+        });
+
+        expect(runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(invoke.sendInvokeResult, {
+          message:
+            "SYSTEM_RUN_DENIED: approval required (security audit suppression changes require explicit approval unless exec is running in yolo mode)",
+          exact: true,
+        });
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "requires explicit approval when system.run auto mode cannot parse the shell command",
     async () => {
       const tmp = createFixtureDir("openclaw-system-run-auto-unparsed-");

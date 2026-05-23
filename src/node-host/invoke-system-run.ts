@@ -30,6 +30,7 @@ import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../in
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   extractEnvAssignmentKeysFromDispatchWrappers,
+  extractShellWrapperInlineCommand,
   isShellWrapperInvocation,
   resolveShellWrapperTransportArgv,
 } from "../infra/exec-wrapper-resolution.js";
@@ -133,6 +134,10 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
 };
 
 type MutableFileOperandSnapshotResult = ReturnType<typeof resolveMutableFileOperandSnapshotSync>;
+
+function resolveSecurityAuditSuppressionCommandText(parsed: SystemRunParsePhase): string {
+  return parsed.shellPayload ?? extractShellWrapperInlineCommand(parsed.argv) ?? parsed.commandText;
+}
 
 const safeBinTrustedDirWarningCache = new Set<string>();
 const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
@@ -580,7 +585,7 @@ async function evaluateSystemRunPolicyPhase(
 
   const securityAuditSuppressionRequiresApproval =
     commandRequiresSecurityAuditSuppressionApproval({
-      command: parsed.commandText,
+      command: resolveSecurityAuditSuppressionCommandText(parsed),
       cwd: parsed.cwd,
       env: parsed.env,
       segments,

@@ -65,6 +65,7 @@ export function commandRequiresSecurityAuditSuppressionApproval(params: {
   segments: ExecCommandSegment[];
 }): boolean {
   let sawSegmentMention = false;
+  let sawNonReadOnlySegmentMention = false;
   for (const segment of params.segments) {
     const segmentText = `${segment.raw ?? ""} ${segment.argv.join(" ")}`;
     if (!textMentionsSecurityAuditSuppressions(segmentText)) {
@@ -72,7 +73,7 @@ export function commandRequiresSecurityAuditSuppressionApproval(params: {
     }
     sawSegmentMention = true;
     if (!isReadOnlySecurityAuditSuppressionInspection(segment.argv)) {
-      return true;
+      sawNonReadOnlySegmentMention = true;
     }
   }
   if (sawSegmentMention) {
@@ -83,13 +84,15 @@ export function commandRequiresSecurityAuditSuppressionApproval(params: {
       platform: process.platform,
     });
     if (!rawAnalysis.ok) {
-      return textMentionsSecurityAuditSuppressions(params.command);
+      return sawNonReadOnlySegmentMention || textMentionsSecurityAuditSuppressions(params.command);
     }
+    let sawRawMention = false;
     for (const segment of rawAnalysis.segments) {
-      if (
-        textMentionsSecurityAuditSuppressions(`${segment.raw} ${segment.argv.join(" ")}`) &&
-        !isReadOnlySecurityAuditSuppressionInspection(segment.argv)
-      ) {
+      if (!textMentionsSecurityAuditSuppressions(`${segment.raw} ${segment.argv.join(" ")}`)) {
+        continue;
+      }
+      sawRawMention = true;
+      if (!isReadOnlySecurityAuditSuppressionInspection(segment.argv)) {
         return true;
       }
     }
@@ -100,7 +103,7 @@ export function commandRequiresSecurityAuditSuppressionApproval(params: {
     ) {
       return true;
     }
-    return false;
+    return sawRawMention ? false : sawNonReadOnlySegmentMention;
   }
   return textMentionsSecurityAuditSuppressions(params.command);
 }
