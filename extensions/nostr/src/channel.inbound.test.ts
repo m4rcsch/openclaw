@@ -49,6 +49,7 @@ function createRuntimeHarness() {
       commands: {
         shouldComputeCommandAuthorized: vi.fn(() => true),
         resolveCommandAuthorizedFromAuthorizers: vi.fn(() => true),
+        isControlCommandMessage: vi.fn(() => false),
       },
       routing: {
         resolveAgentRoute: vi.fn(({ accountId, peer }) => ({

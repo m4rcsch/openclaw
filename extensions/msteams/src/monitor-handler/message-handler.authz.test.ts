@@ -648,6 +648,8 @@ describe("msteams monitor handler authz", () => {
     const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
     expect(ctxPayload.BodyForAgent).toBe("hello /status");
     expect(ctxPayload.CommandAuthorized).toBe(false);
+    // Inline non-control text must not take the source-reply explicit-command bypass.
+    expect(ctxPayload.CommandSource).toBeUndefined();
   });
 
   it("flushes pending group text before authorizing a bare abort without a mention", async () => {
@@ -689,6 +691,7 @@ describe("msteams monitor handler authz", () => {
     const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
     expect(ctxPayload.BodyForAgent).toBe("abort");
     expect(ctxPayload.CommandAuthorized).toBe(true);
+    expect(ctxPayload.CommandSource).toBe("text");
   });
 
   it("marks skipped channel message system events as non-owner", async () => {

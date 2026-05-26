@@ -124,6 +124,10 @@ export async function handleClickClackInbound(params: {
   const storePath = runtime.channel.session.resolveStorePath(params.config.session?.store, {
     agentId: route.agentId,
   });
+  const isControlCommand = runtime.channel.commands.isControlCommandMessage(
+    message.body,
+    params.config as OpenClawConfig,
+  );
   const ctxPayload = runtime.channel.reply.finalizeInboundContext({
     Body: body,
     BodyForAgent: message.body,
@@ -151,6 +155,9 @@ export async function handleClickClackInbound(params: {
     OriginatingChannel: CHANNEL_ID,
     OriginatingTo: target,
     CommandAuthorized: true,
+    // CommandAuthorized is hardcoded true on this channel, so the source-reply bypass tag
+    // depends only on the body. See #86664.
+    CommandSource: isControlCommand ? ("text" as const) : undefined,
   });
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: params.config as OpenClawConfig,

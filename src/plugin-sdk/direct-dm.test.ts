@@ -224,8 +224,40 @@ describe("plugin-sdk/direct-dm", () => {
     expect(result.ctxPayload.SenderId).toBe("sender-1");
     expect(result.ctxPayload.MessageSid).toBe("event-123");
     expect(result.ctxPayload.CommandAuthorized).toBe(true);
+    expect(result.ctxPayload.CommandSource).toBeUndefined();
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     expect(deliver).toHaveBeenCalledWith({ text: "reply text" });
+  });
+
+  it("propagates commandSource: text onto the inbound context for authorized control commands", async () => {
+    const { runtime } = createDirectDmRuntime();
+    const deliver = vi.fn(async () => {});
+
+    const result = await dispatchInboundDirectDmWithRuntime({
+      cfg: {
+        session: { store: { type: "jsonl" } },
+      } as never,
+      runtime,
+      channel: "nostr",
+      channelLabel: "Nostr",
+      accountId: "default",
+      peer: { kind: "direct", id: "sender-1" },
+      senderId: "sender-1",
+      senderAddress: "nostr:sender-1",
+      recipientAddress: "nostr:bot-1",
+      conversationLabel: "sender-1",
+      rawBody: "/reset",
+      messageId: "event-456",
+      timestamp: 1_710_000_000_000,
+      commandAuthorized: true,
+      commandSource: "text",
+      deliver,
+      onRecordError: () => {},
+      onDispatchError: () => {},
+    });
+
+    expect(result.ctxPayload.CommandAuthorized).toBe(true);
+    expect(result.ctxPayload.CommandSource).toBe("text");
   });
 });

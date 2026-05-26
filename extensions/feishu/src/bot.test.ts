@@ -193,6 +193,7 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
       commands: {
         shouldComputeCommandAuthorized: vi.fn(() => false),
         resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+        isControlCommandMessage: vi.fn(() => false),
       },
       pairing: {
         readAllowFromStore: vi.fn().mockResolvedValue(["ou_sender_1"]),
@@ -948,6 +949,7 @@ describe("handleFeishuMessage command authorization", () => {
   );
   const mockResolveCommandAuthorizedFromAuthorizers = vi.fn(() => false);
   const mockShouldComputeCommandAuthorized = vi.fn(() => true);
+  const mockIsControlCommandMessage = vi.fn(() => false);
   const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
   const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false });
   const mockBuildPairingReply = vi.fn(() => "Pairing response");
@@ -1007,6 +1009,7 @@ describe("handleFeishuMessage command authorization", () => {
           commands: {
             shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
             resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
+            isControlCommandMessage: mockIsControlCommandMessage,
           },
           pairing: {
             readAllowFromStore: mockReadAllowFromStore,

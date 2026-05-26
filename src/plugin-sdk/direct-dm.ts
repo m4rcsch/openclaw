@@ -73,6 +73,12 @@ export async function dispatchInboundDirectDmWithRuntime(params: {
   messageId: string;
   timestamp?: number;
   commandAuthorized?: boolean;
+  /**
+   * Pass `"text"` when `commandAuthorized` is true and the body is itself a control
+   * command (e.g. `/new`, `/reset`); `"native"` for channel-native slash UI. Required for
+   * acknowledgements to survive `message_tool_only` delivery modes. See #86664.
+   */
+  commandSource?: "text" | "native";
   bodyForAgent?: string;
   commandBody?: string;
   provider?: string;
@@ -122,6 +128,7 @@ export async function dispatchInboundDirectDmWithRuntime(params: {
     MessageSidFull: params.messageId,
     Timestamp: params.timestamp,
     CommandAuthorized: params.commandAuthorized,
+    CommandSource: params.commandSource,
     OriginatingChannel: params.originatingChannel ?? params.channel,
     OriginatingTo: params.originatingTo ?? params.recipientAddress,
     ...params.extraContext,

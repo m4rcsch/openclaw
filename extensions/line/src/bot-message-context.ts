@@ -38,6 +38,10 @@ interface BuildLineMessageContextParams {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   commandAuthorized: boolean;
+  /** True when the body is itself a control command (e.g. `/new`, `/reset`), as opposed
+   *  to ordinary text that merely contains inline command tokens. Drives the source-reply
+   *  explicit-command bypass tag in finalizeLineInboundContext. See #86664. */
+  hasControlCommand?: boolean;
   groupHistories?: Map<string, HistoryEntry[]>;
   historyLimit?: number;
 }
@@ -284,6 +288,8 @@ async function finalizeLineInboundContext(params: {
   timestamp: number;
   messageSid: string;
   commandAuthorized: boolean;
+  /** See BuildLineMessageContextParams.hasControlCommand. */
+  hasControlCommand?: boolean;
   media: {
     firstPath: string | undefined;
     firstContentType?: string;
@@ -357,6 +363,9 @@ async function finalizeLineInboundContext(params: {
     MediaTypes: params.media.types,
     ...params.locationContext,
     CommandAuthorized: params.commandAuthorized,
+    // Tag for source-reply-delivery-mode's explicit-command bypass. See #86664.
+    CommandSource:
+      params.commandAuthorized && params.hasControlCommand ? ("text" as const) : undefined,
     OriginatingChannel: "line" as const,
     OriginatingTo: originatingTo,
     GroupSystemPrompt: params.source.isGroup
@@ -436,7 +445,16 @@ async function finalizeLineInboundContext(params: {
 }
 
 export async function buildLineMessageContext(params: BuildLineMessageContextParams) {
-  const { event, allMedia, cfg, account, commandAuthorized, groupHistories, historyLimit } = params;
+  const {
+    event,
+    allMedia,
+    cfg,
+    account,
+    commandAuthorized,
+    hasControlCommand,
+    groupHistories,
+    historyLimit,
+  } = params;
 
   const source = event.source;
   const { userId, groupId, roomId, isGroup, peerId, route } = await resolveLineInboundRoute({
@@ -491,6 +509,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     timestamp,
     messageSid: messageId,
     commandAuthorized,
+    hasControlCommand,
     media: {
       firstPath: allMedia[0]?.path,
       firstContentType: allMedia[0]?.contentType,
@@ -526,6 +545,8 @@ export async function buildLinePostbackContext(params: {
   commandAuthorized: boolean;
 }) {
   const { event, cfg, account, commandAuthorized } = params;
+  // Postbacks come from interactive UI components, not typed text.
+  const hasControlCommand = false;
 
   const source = event.source;
   const { userId, groupId, roomId, isGroup, peerId, route } = await resolveLineInboundRoute({
@@ -558,6 +579,7 @@ export async function buildLinePostbackContext(params: {
     timestamp,
     messageSid,
     commandAuthorized,
+    hasControlCommand,
     media: {
       firstPath: "",
       firstContentType: undefined,

@@ -3,6 +3,7 @@ import { buildMentionRegexes, matchesMentionPatterns } from "openclaw/plugin-sdk
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/command-auth-native";
+import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   readChannelAllowFromStore,
@@ -481,12 +482,14 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     }
   }
 
+  const messageText = message.type === "text" ? message.text : "";
   const messageContext = await buildLineMessageContext({
     event,
     allMedia,
     cfg,
     account,
     commandAuthorized: decision.commandAccess.authorized,
+    hasControlCommand: isControlCommandMessage(messageText, cfg),
     groupHistories: context.groupHistories,
     historyLimit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   });

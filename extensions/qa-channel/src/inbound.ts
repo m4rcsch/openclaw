@@ -179,6 +179,10 @@ export async function handleQaInbound(params: {
   });
   const mediaPayload = await resolveQaInboundMediaPayload(inbound.attachments);
 
+  const isControlCommand = runtime.channel.commands.isControlCommandMessage(
+    inbound.text,
+    params.config as OpenClawConfig,
+  );
   const ctxPayload = runtime.channel.reply.finalizeInboundContext({
     Body: body,
     BodyForAgent: inbound.text,
@@ -214,6 +218,9 @@ export async function handleQaInbound(params: {
     OriginatingChannel: params.channelId,
     OriginatingTo: target,
     CommandAuthorized: true,
+    // CommandAuthorized is hardcoded true on this channel, so the source-reply bypass tag
+    // depends only on the body. See #86664.
+    CommandSource: isControlCommand ? ("text" as const) : undefined,
     ...mediaPayload,
   });
 

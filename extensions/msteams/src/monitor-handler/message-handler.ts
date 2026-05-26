@@ -796,6 +796,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       Timestamp: timestamp?.getTime() ?? Date.now(),
       WasMentioned: isDirectMessage || mentionDecision.effectiveWasMentioned,
       CommandAuthorized: commandAuthorized,
+      // Tag for source-reply-delivery-mode's explicit-command bypass. See #86664.
+      CommandSource: commandAuthorized === true && isControlCommand ? ("text" as const) : undefined,
       OriginatingChannel: "msteams" as const,
       OriginatingTo: teamsTo,
       NativeChannelId: nativeChannelId,

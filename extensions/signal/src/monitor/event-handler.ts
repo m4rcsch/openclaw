@@ -119,6 +119,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaPaths?: string[];
     mediaTypes?: string[];
     commandAuthorized: boolean;
+    /** True when the body is itself a control command (e.g. `/new`, `/reset`), as opposed
+     *  to ordinary text that merely contains inline command tokens. Drives the
+     *  source-reply explicit-command bypass tag. See #86664. */
+    hasControlCommand: boolean;
     wasMentioned?: boolean;
     replyToBody?: string;
     replyToSender?: string;
@@ -225,6 +229,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       MediaTypes: entry.mediaTypes,
       WasMentioned: entry.isGroup ? entry.wasMentioned === true : undefined,
       CommandAuthorized: entry.commandAuthorized,
+      // Tag for source-reply-delivery-mode's explicit-command bypass. See #86664.
+      CommandSource:
+        entry.commandAuthorized && entry.hasControlCommand ? ("text" as const) : undefined,
       OriginatingChannel: "signal" as const,
       OriginatingTo: signalTo,
     });
@@ -899,6 +906,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
+      hasControlCommand: hasControlCommandInMessage,
       wasMentioned: effectiveWasMentioned,
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,

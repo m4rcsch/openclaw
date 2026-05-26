@@ -348,6 +348,8 @@ export async function handleNextcloudTalkInbound(params: {
     OriginatingChannel: CHANNEL_ID,
     OriginatingTo: `nextcloud-talk:${roomToken}`,
     CommandAuthorized: commandAuthorized,
+    // Tag for source-reply-delivery-mode's explicit-command bypass. See #86664.
+    CommandSource: commandAuthorized && hasControlCommand ? ("text" as const) : undefined,
   });
 
   await core.channel.turn.runAssembled({

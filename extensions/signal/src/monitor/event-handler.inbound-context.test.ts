@@ -492,6 +492,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
 
     expect(requireCapturedContext().CommandAuthorized).toBe(true);
+    expect(requireCapturedContext().CommandSource).toBe("text");
   });
 
   it("allows reaction-only group events when groupAllowFrom matches the reaction group id", async () => {

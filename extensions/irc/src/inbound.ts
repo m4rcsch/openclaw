@@ -394,6 +394,8 @@ export async function handleIrcInbound(params: {
     OriginatingChannel: CHANNEL_ID,
     OriginatingTo: message.isGroup ? `channel:${channelTarget}` : `irc:${peerId}`,
     CommandAuthorized: commandAuthorized,
+    // Tag for source-reply-delivery-mode's explicit-command bypass. See #86664.
+    CommandSource: commandAuthorized && hasControlCommand ? ("text" as const) : undefined,
   });
 
   await core.channel.turn.runAssembled({

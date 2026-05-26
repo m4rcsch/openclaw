@@ -179,6 +179,13 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
         commandAuthorized: resolvedAccess.commandAccess.requested
           ? resolvedAccess.commandAccess.authorized
           : undefined,
+        // Tag for source-reply-delivery-mode's explicit-command bypass. See #86664.
+        commandSource:
+          resolvedAccess.commandAccess.requested &&
+          resolvedAccess.commandAccess.authorized &&
+          runtime.channel.commands.isControlCommandMessage(text, ctx.cfg)
+            ? "text"
+            : undefined,
         deliver: async (payload) => {
           const outboundText =
             payload && typeof payload === "object" && "text" in payload

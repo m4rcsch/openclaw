@@ -111,6 +111,7 @@ describe("broadcast dispatch", () => {
       commands: {
         shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
         resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+        isControlCommandMessage: vi.fn(() => false),
       },
       media: {
         saveMediaBuffer: mockSaveMediaBuffer,

@@ -956,6 +956,12 @@ export async function handleFeishuMessage(params: {
       audioTranscript === undefined
         ? shouldComputeCommandAuthorized
         : core.channel.commands.shouldComputeCommandAuthorized(effectiveCommandProbeBody, cfg);
+    // Narrower than shouldComputeCommandAuthorized: only matches bodies that are themselves
+    // control commands, not bodies that merely contain inline command tokens.
+    const isControlCommand = core.channel.commands.isControlCommandMessage(
+      effectiveCommandProbeBody,
+      cfg,
+    );
     const commandAuthorized = shouldComputeEffectiveCommandAuthorized
       ? isDirect && audioTranscript === undefined && dmIngress
         ? dmIngress.commandAccess.authorized
@@ -1300,6 +1306,8 @@ export async function handleFeishuMessage(params: {
         Timestamp: messageCreateTimeMs,
         WasMentioned: wasMentioned,
         CommandAuthorized: commandAuthorized,
+        // Tag for source-reply-delivery-mode's explicit-command bypass. See #86664.
+        CommandSource: commandAuthorized && isControlCommand ? ("text" as const) : undefined,
         OriginatingChannel: "feishu" as const,
         OriginatingTo: feishuTo,
         GroupSystemPrompt: isGroup ? normalizeOptionalString(groupConfig?.systemPrompt) : undefined,
