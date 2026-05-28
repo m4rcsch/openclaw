@@ -2,6 +2,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "./minimax-vlm.js";
 
+async function mustRejectWithError(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise;
+  } catch (caught) {
+    if (caught instanceof Error) {
+      return caught;
+    }
+    throw new Error("expected promise to reject with an Error");
+  }
+  throw new Error("expected promise to reject");
+}
+
 describe("minimaxUnderstandImage apiKey normalization", () => {
   const priorFetch = global.fetch;
   const priorMinimaxApiHost = process.env.MINIMAX_API_HOST;
@@ -173,12 +185,14 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     });
     global.fetch = withFetchPreconnect(fetchSpy);
 
-    const error = await minimaxUnderstandImage({
-      apiKey: "minimax-test-key",
-      prompt: "hi",
-      imageDataUrl: "data:image/png;base64,AAAA",
-      apiHost: "https://api.minimax.io",
-    }).catch((caught: unknown) => caught as Error);
+    const error = await mustRejectWithError(
+      minimaxUnderstandImage({
+        apiKey: "minimax-test-key",
+        prompt: "hi",
+        imageDataUrl: "data:image/png;base64,AAAA",
+        apiHost: "https://api.minimax.io",
+      }),
+    );
 
     expect(error).toBeInstanceOf(Error);
     expect(error.message).toContain("MiniMax VLM request failed");
