@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { runCommandWithTimeout } from "../process/exec.js";
-import { discoverGatewayBeacons, resolveGatewayDiscoveryEndpoint } from "./bonjour-discovery.js";
+import {
+  discoverGatewayBeacons,
+  resolveGatewayDiscoveryEndpoint,
+  type GatewayBonjourBeacon,
+} from "./bonjour-discovery.js";
 
 const WIDE_AREA_DOMAIN = "openclaw.internal.";
 
@@ -225,7 +229,7 @@ describe("bonjour-discovery", () => {
     });
 
     expect(beacons).toHaveLength(1);
-    const beacon = beacons[0] as BeaconRecord;
+    const beacon = beacons[0] as GatewayBonjourBeacon;
     expect(beacon.host).toBe("broken.local");
     expect(beacon.port).toBeUndefined();
     expect(beacon.gatewayPort).toBeUndefined();
