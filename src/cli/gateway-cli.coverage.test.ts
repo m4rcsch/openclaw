@@ -43,7 +43,8 @@ const { runtimeLogs, runtimeErrors, defaultRuntime } = mocks;
 
 vi.mock(
   new URL("../../gateway/call.ts", new URL("./gateway-cli/call.ts", import.meta.url)).href,
-  () => ({
+  async () => ({
+    ...(await vi.importActual<typeof import("../gateway/call.js")>("../gateway/call.js")),
     callGateway: (opts: unknown) => callGateway(opts),
     formatGatewayTransportErrorJson: (error: unknown) => formatGatewayTransportErrorJson(error),
     randomIdempotencyKey: () => "rk_test",
