@@ -13,6 +13,37 @@ export type DirectLoopbackGatewayAuthOpts = {
   config?: OpenClawConfig;
 };
 
+type SharedGatewayCredentials = {
+  token?: string;
+  password?: string;
+};
+
+async function resolveConfiguredSharedGatewayCredentials(
+  config: OpenClawConfig | undefined,
+): Promise<SharedGatewayCredentials | undefined> {
+  const resolvedConfig = config ?? loadConfigForDirectAuthProbe();
+  const auth = resolveGatewayAuth({
+    authConfig: resolvedConfig?.gateway?.auth,
+    tailscaleMode: resolvedConfig?.gateway?.tailscale?.mode,
+    env: process.env,
+  });
+  if (auth.mode !== "token" && auth.mode !== "password") {
+    return undefined;
+  }
+  const literalCredentials = { token: auth.token, password: auth.password };
+  if (literalCredentials.token || literalCredentials.password || !resolvedConfig) {
+    return literalCredentials;
+  }
+  try {
+    return await resolveGatewayConnectionAuth({
+      config: resolvedConfig,
+      env: process.env,
+    });
+  } catch {
+    return undefined;
+  }
+}
+
 async function isConfiguredSharedGatewayToken(params: {
   token: string | undefined;
   config?: OpenClawConfig;
@@ -20,30 +51,8 @@ async function isConfiguredSharedGatewayToken(params: {
   if (!params.token) {
     return false;
   }
-  const config = params.config ?? loadConfigForDirectAuthProbe();
-  const auth = resolveGatewayAuth({
-    authConfig: config?.gateway?.auth,
-    tailscaleMode: config?.gateway?.tailscale?.mode,
-    env: process.env,
-  });
-  if (auth.mode !== "token") {
-    return false;
-  }
-  if (auth.token === params.token) {
-    return true;
-  }
-  if (!config) {
-    return false;
-  }
-  try {
-    const credentials = await resolveGatewayConnectionAuth({
-      config,
-      env: process.env,
-    });
-    return credentials.token === params.token;
-  } catch {
-    return false;
-  }
+  const credentials = await resolveConfiguredSharedGatewayCredentials(params.config);
+  return credentials?.token === params.token;
 }
 
 function loadConfigForDirectAuthProbe(): OpenClawConfig | undefined {
@@ -54,22 +63,37 @@ function loadConfigForDirectAuthProbe(): OpenClawConfig | undefined {
   }
 }
 
+function isLoopbackGatewayUrl(url: string | undefined): boolean {
+  if (!url) {
+    return false;
+  }
+  try {
+    return isLoopbackHost(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
 export async function shouldUseDirectLoopbackGatewayAuth(
   opts: DirectLoopbackGatewayAuthOpts,
 ): Promise<boolean> {
   const token = normalizeStringifiedOptionalString(opts.token);
   const password = normalizeStringifiedOptionalString(opts.password);
-  if (!token && !password) {
+  const explicitUrl = normalizeStringifiedOptionalString(opts.url);
+  if (explicitUrl && !isLoopbackGatewayUrl(explicitUrl)) {
     return false;
   }
-  const explicitUrl = normalizeStringifiedOptionalString(opts.url);
-  const gatewayUrl = explicitUrl ?? buildGatewayConnectionDetails({ config: opts.config }).url;
-  try {
-    if (!isLoopbackHost(new URL(gatewayUrl).hostname)) {
-      return false;
-    }
-  } catch {
+  const configuredCredentials =
+    !token && !password ? await resolveConfiguredSharedGatewayCredentials(opts.config) : undefined;
+  if (!token && !password && !configuredCredentials?.token && !configuredCredentials?.password) {
     return false;
+  }
+  const gatewayUrl = explicitUrl ?? buildGatewayConnectionDetails({ config: opts.config }).url;
+  if (!isLoopbackGatewayUrl(gatewayUrl)) {
+    return false;
+  }
+  if (!token && !password) {
+    return true;
   }
   return Boolean(
     password || (await isConfiguredSharedGatewayToken({ token, config: opts.config })),

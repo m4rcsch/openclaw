@@ -67,6 +67,21 @@ describe("shouldUseDirectLoopbackGatewayAuth", () => {
     });
   });
 
+  it("recognizes implicit env gateway tokens as shared loopback auth", async () => {
+    await withTempHomeConfig(
+      {
+        gateway: {
+          auth: { mode: "token" },
+        },
+      },
+      async () => {
+        await withEnvOverride({ OPENCLAW_GATEWAY_TOKEN: "env-shared-token" }, async () => {
+          expect(await shouldUseDirectLoopbackGatewayAuth({})).toBe(true);
+        });
+      },
+    );
+  });
+
   it("does not resolve configured token refs for remote explicit-token URLs", async () => {
     await withEnvOverride({ CONFIG_GATEWAY_TOKEN: undefined }, async () => {
       expect(
@@ -97,6 +112,29 @@ describe("shouldUseDirectLoopbackGatewayAuth", () => {
         await shouldUseDirectLoopbackGatewayAuth({
           url: "ws://127.0.0.1:18789",
           token: "explicit-token",
+          config: {
+            gateway: {
+              auth: {
+                mode: "token",
+                token: { source: "env", provider: "default", id: "CONFIG_GATEWAY_TOKEN" },
+              },
+            },
+            secrets: {
+              providers: {
+                default: { source: "env" },
+              },
+            },
+          },
+        }),
+      ).toBe(false);
+    });
+  });
+
+  it("does not resolve configured token refs for remote implicit-auth URLs", async () => {
+    await withEnvOverride({ CONFIG_GATEWAY_TOKEN: undefined }, async () => {
+      expect(
+        await shouldUseDirectLoopbackGatewayAuth({
+          url: "wss://remote.example.test/ws",
           config: {
             gateway: {
               auth: {
