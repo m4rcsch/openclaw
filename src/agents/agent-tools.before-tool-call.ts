@@ -43,6 +43,7 @@ import {
 import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
 import { isPlainObject } from "../utils.js";
 import { adjustedParamsByToolCallId } from "./agent-tools.before-tool-call.state.js";
+import { stripXmlArgValueSuffixFromToolParams } from "./agent-tools.params.js";
 import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
 import {
   getCodeModeExecBeforeHookMetadata,
@@ -714,7 +715,7 @@ export async function runBeforeToolCallHook(args: {
   approvalMode?: "request" | "report" | "defer";
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
-  const params = args.params;
+  const params = stripXmlArgValueSuffixFromToolParams(toolName, args.params);
 
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
@@ -1033,8 +1034,9 @@ export function wrapToolWithBeforeToolCallHook(
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
-      const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params });
-      const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params });
+      const normalizedParams = stripXmlArgValueSuffixFromToolParams(toolName, params);
+      const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params: normalizedParams });
+      const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params: normalizedParams });
       const outcome = await runBeforeToolCallHook({
         toolName,
         params: hookParams,
@@ -1044,6 +1046,7 @@ export function wrapToolWithBeforeToolCallHook(
         signal,
         approvalMode: hookOptions.approvalMode,
       });
+      const outcomeParams = stripXmlArgValueSuffixFromToolParams(toolName, outcome.params);
       if (outcome.blocked) {
         if (outcome.kind !== "veto") {
           throw new Error(outcome.reason);
@@ -1060,7 +1063,7 @@ export function wrapToolWithBeforeToolCallHook(
           toolName: normalizedToolName,
           ...diagnosticIdentity,
           ...(toolCallId && { toolCallId }),
-          paramsSummary: summarizeToolParams(outcome.params ?? hookParams),
+          paramsSummary: summarizeToolParams(outcomeParams ?? hookParams),
         };
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEvent({
@@ -1077,7 +1080,7 @@ export function wrapToolWithBeforeToolCallHook(
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,
-          toolParams: outcome.params ?? hookParams,
+          toolParams: outcomeParams ?? hookParams,
           toolCallId,
           result: blockedResult,
         });
@@ -1085,9 +1088,9 @@ export function wrapToolWithBeforeToolCallHook(
       }
       const executeParams = reconcileCodeModeExecBeforeHookParams({
         tool,
-        originalParams: params,
+        originalParams: normalizedParams,
         hookParams,
-        adjustedParams: outcome.params,
+        adjustedParams: outcomeParams,
       });
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const normalizedToolName = normalizeToolName(toolName || "tool");
