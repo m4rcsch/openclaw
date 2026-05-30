@@ -1052,14 +1052,18 @@ export async function callGatewayScoped<T = Record<string, unknown>>(
   return await callGatewayWithScopes(opts, opts.scopes);
 }
 
+export function resolveGatewayCliScopes(method: string, params?: unknown): OperatorScope[] {
+  return isGatewayMethodClassified(method)
+    ? resolveLeastPrivilegeOperatorScopesForMethod(method, params)
+    : [...CLI_DEFAULT_OPERATOR_SCOPES];
+}
+
 export async function callGatewayCli<T = Record<string, unknown>>(
   opts: CallGatewayCliOptions,
 ): Promise<T> {
   const scopes = Array.isArray(opts.scopes)
     ? opts.scopes
-    : isGatewayMethodClassified(opts.method)
-      ? resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params)
-      : CLI_DEFAULT_OPERATOR_SCOPES;
+    : resolveGatewayCliScopes(opts.method, opts.params);
   return await callGatewayWithScopes(opts, scopes);
 }
 

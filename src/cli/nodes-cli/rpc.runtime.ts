@@ -2,7 +2,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { callGateway } from "../../gateway/call.js";
+import { callGateway, resolveGatewayCliScopes } from "../../gateway/call.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { shouldUseDirectLoopbackGatewayAuth } from "../direct-loopback-gateway-auth.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
@@ -38,6 +38,7 @@ export async function callGatewayCliRuntime(
         timeoutMs: resolveNodesTransportTimeoutMs(opts, callOpts?.transportTimeoutMs),
         clientName: useDirectAuth ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
         mode: useDirectAuth ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+        scopes: useDirectAuth ? resolveGatewayCliScopes(method, params) : undefined,
         deviceIdentity: useDirectAuth ? null : undefined,
       });
     },

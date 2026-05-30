@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CLI_DEFAULT_OPERATOR_SCOPES } from "../../gateway/method-scopes.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals.js";
 import { parseTimeoutMs } from "../parse-timeout.js";
 import { callGatewayCli, callNodePairApprovalGatewayCli } from "./rpc.js";
@@ -28,6 +29,14 @@ const { callGatewaySpy } = vi.hoisted(() => ({
 vi.mock("../../gateway/call.js", () => ({
   callGateway: callGatewaySpy,
   randomIdempotencyKey: () => "mock-key",
+  resolveGatewayCliScopes: () => [
+    "operator.admin",
+    "operator.read",
+    "operator.write",
+    "operator.approvals",
+    "operator.pairing",
+    "operator.talk.secrets",
+  ],
 }));
 
 vi.mock("../progress.js", () => ({
@@ -72,6 +81,22 @@ describe("exec approval transport timeout (#12098)", () => {
       method: "node.list",
       clientName: "gateway-client",
       mode: "backend",
+      deviceIdentity: null,
+    });
+  });
+
+  it("callGatewayCli preserves CLI fallback scopes for unclassified direct loopback token calls", async () => {
+    await callGatewayCli("plugin.custom.unclassified", {
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+    } as never);
+
+    expect(callGatewaySpy).toHaveBeenCalledTimes(1);
+    expect(firstGatewayCall()).toMatchObject({
+      method: "plugin.custom.unclassified",
+      clientName: "gateway-client",
+      mode: "backend",
+      scopes: CLI_DEFAULT_OPERATOR_SCOPES,
       deviceIdentity: null,
     });
   });

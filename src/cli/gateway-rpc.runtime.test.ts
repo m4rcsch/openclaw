@@ -3,6 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const callGatewayMock = vi.fn(async () => ({ ok: true }));
 vi.mock("../gateway/call.js", () => ({
   callGateway: callGatewayMock,
+  resolveGatewayCliScopes: (method: string) =>
+    method === "health"
+      ? ["operator.read"]
+      : [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+          "operator.approvals",
+          "operator.pairing",
+          "operator.talk.secrets",
+        ],
 }));
 
 vi.mock("./progress.js", () => ({
@@ -65,6 +76,31 @@ describe("callGatewayFromCliRuntime", () => {
         method: "health",
         clientName: "gateway-client",
         mode: "backend",
+        scopes: ["operator.read"],
+        deviceIdentity: null,
+      }),
+    );
+  });
+
+  it("uses CLI fallback scopes for unclassified explicit loopback token calls", async () => {
+    await callGatewayFromCliRuntime("plugin.custom.unclassified", {
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "plugin.custom.unclassified",
+        clientName: "gateway-client",
+        mode: "backend",
+        scopes: [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+          "operator.approvals",
+          "operator.pairing",
+          "operator.talk.secrets",
+        ],
         deviceIdentity: null,
       }),
     );

@@ -24,6 +24,20 @@ import {
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
+type NativeExecApprovalRule = {
+  pattern?: string;
+  action?: string;
+  shells?: string[];
+  description?: string;
+  enabled?: boolean;
+};
+
+type NativeExecApprovalPolicy = {
+  enabled?: boolean;
+  defaultAction?: string;
+  rules?: NativeExecApprovalRule[];
+};
+
 function requireApprovalsBaseHash(
   params: unknown,
   snapshot: ExecApprovalsSnapshot,
@@ -174,9 +188,10 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const { nodeId, file, baseHash } = params as {
+    const { nodeId, file, native, baseHash } = params as {
       nodeId: string;
-      file: ExecApprovalsFile;
+      file?: ExecApprovalsFile;
+      native?: NativeExecApprovalPolicy;
       baseHash?: string;
     };
     const id = resolveNodeIdOrRespond(nodeId, respond);
@@ -187,7 +202,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       const res = await context.nodeRegistry.invoke({
         nodeId: id,
         command: "system.execApprovals.set",
-        params: { file, baseHash },
+        params: native ? { ...native, baseHash } : { file, baseHash },
       });
       if (!respondUnavailableOnNodeInvokeError(respond, res)) {
         return;

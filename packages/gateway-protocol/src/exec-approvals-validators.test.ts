@@ -37,6 +37,19 @@ describe("exec approvals protocol validators", () => {
     ).toBe(true);
   });
 
+  it("accepts host-native node approval policy payloads", () => {
+    expect(
+      validateExecApprovalsNodeSetParams({
+        nodeId: "node-1",
+        native: {
+          defaultAction: "deny",
+          rules: [{ pattern: "echo *", action: "allow", enabled: true }],
+        },
+        baseHash: "native-hash-1",
+      }),
+    ).toBe(true);
+  });
+
   it("rejects unknown allowlist metadata", () => {
     expect(
       validateExecApprovalsSetParams({

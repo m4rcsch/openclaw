@@ -19,6 +19,7 @@ import {
   buildGatewayConnectionDetails,
   callGateway,
   formatGatewayTransportErrorJson,
+  resolveGatewayCliScopes,
 } from "../gateway/call.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
 import { isLoopbackHost } from "../gateway/net.js";
@@ -136,7 +137,8 @@ const callGatewayCli = async (
         timeoutMs: parseTimeoutMsWithFallback(opts.timeout, DEFAULT_DEVICES_TIMEOUT_MS),
         clientName: useDirectAuth ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
         mode: useDirectAuth ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
-        scopes: callOpts?.scopes,
+        scopes:
+          callOpts?.scopes ?? (useDirectAuth ? resolveGatewayCliScopes(method, params) : undefined),
         deviceIdentity: useDirectAuth ? null : undefined,
       });
     },

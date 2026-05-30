@@ -37,6 +37,14 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
   formatGatewayTransportErrorJson: mocks.formatGatewayTransportErrorJson,
   buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
+  resolveGatewayCliScopes: () => [
+    "operator.admin",
+    "operator.read",
+    "operator.write",
+    "operator.approvals",
+    "operator.pairing",
+    "operator.talk.secrets",
+  ],
 }));
 
 vi.mock("./progress.js", () => ({

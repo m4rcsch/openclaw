@@ -2,7 +2,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { callGateway } from "../gateway/call.js";
+import { callGateway, resolveGatewayCliScopes } from "../gateway/call.js";
 import { shouldUseDirectLoopbackGatewayAuth } from "./direct-loopback-gateway-auth.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
@@ -50,7 +50,8 @@ export async function callGatewayFromCliRuntime(
               ? null
               : undefined,
         expectFinal: extra?.expectFinal ?? Boolean(opts.expectFinal),
-        scopes: extra?.scopes,
+        scopes:
+          extra?.scopes ?? (useDirectAuth ? resolveGatewayCliScopes(method, params) : undefined),
         timeoutMs: parseTimeoutMsWithFallback(opts.timeout, DEFAULT_GATEWAY_RPC_TIMEOUT_MS),
         clientName:
           extra?.clientName ??

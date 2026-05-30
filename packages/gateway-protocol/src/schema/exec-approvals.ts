@@ -79,14 +79,44 @@ export const ExecApprovalsNodeGetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ExecApprovalsNodeSetParamsSchema = Type.Object(
+export const NativeExecApprovalRuleSchema = Type.Object(
   {
-    nodeId: NonEmptyString,
-    file: ExecApprovalsFileSchema,
-    baseHash: Type.Optional(NonEmptyString),
+    pattern: Type.String(),
+    action: Type.String(),
+    shells: Type.Optional(Type.Array(Type.String())),
+    description: Type.Optional(Type.String()),
+    enabled: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
+
+export const NativeExecApprovalPolicySchema = Type.Object(
+  {
+    enabled: Type.Optional(Type.Boolean()),
+    defaultAction: Type.Optional(Type.String()),
+    rules: Type.Optional(Type.Array(NativeExecApprovalRuleSchema)),
+  },
+  { additionalProperties: false },
+);
+
+export const ExecApprovalsNodeSetParamsSchema = Type.Union([
+  Type.Object(
+    {
+      nodeId: NonEmptyString,
+      file: ExecApprovalsFileSchema,
+      baseHash: Type.Optional(NonEmptyString),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      nodeId: NonEmptyString,
+      native: NativeExecApprovalPolicySchema,
+      baseHash: Type.Optional(NonEmptyString),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 export const ExecApprovalGetParamsSchema = Type.Object(
   {
