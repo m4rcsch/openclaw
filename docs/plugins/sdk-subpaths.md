@@ -27,8 +27,6 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
 | `plugin-sdk/core`              | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema`, `buildJsonChannelConfigSchema` |
 | `plugin-sdk/config-schema`     | `OpenClawSchema`                                                                                                                                                       |
 | `plugin-sdk/provider-entry`    | `defineSingleProviderPluginEntry`                                                                                                                                      |
-| `plugin-sdk/provider-ai`       | OpenClaw-owned provider stream/model/message types plus simple streaming helpers used by bundled provider plugins                                                      |
-| `plugin-sdk/provider-ai-oauth` | OpenClaw-owned OAuth helper facade for provider runtime code                                                                                                           |
 | `plugin-sdk/migration`         | Migration provider item helpers such as `createMigrationItem`, reason constants, item status markers, redaction helpers, and `summarizeMigrationItems`                 |
 | `plugin-sdk/migration-runtime` | Runtime migration helpers such as `copyMigrationFileItem`, `withCachedMigrationConfigRuntime`, and `writeMigrationReport`                                              |
 | `plugin-sdk/health`            | Doctor health-check registration, detection, repair, selection, severity, and finding types for bundled health consumers                                               |
@@ -240,7 +238,6 @@ and pairing-path families.
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
     | `plugin-sdk/session-store-runtime` | SQLite-backed session row, session-key, updated-at, and transcript row helpers |
-    | `plugin-sdk/sqlite-runtime` | Focused SQLite database open/path helpers for first-party runtime and migration tests |
     | `plugin-sdk/cron-store-runtime` | SQLite cron store load/save helpers |
     | `plugin-sdk/state-paths` | Config, credentials, migration, and explicit operator-file path helpers; runtime state and caches belong in SQLite stores |
     | `plugin-sdk/plugin-state-runtime` | Plugin sidecar SQLite keyed-state types |
@@ -297,7 +294,6 @@ and pairing-path families.
     | `plugin-sdk/response-limit-runtime` | Bounded response-body reader without the broad media runtime surface |
     | `plugin-sdk/session-binding-runtime` | Current conversation binding state without configured binding routing or pairing stores |
     | `plugin-sdk/session-store-runtime` | SQLite session row helpers without broad config writes, maintenance imports, or raw database openers |
-    | `plugin-sdk/sqlite-runtime` | Focused SQLite database helpers without session-row helper imports |
     | `plugin-sdk/context-visibility-runtime` | Context visibility resolution and supplemental context filtering without broad config/security imports |
     | `plugin-sdk/string-coerce-runtime` | Narrow primitive record/string coercion and normalization helpers without markdown/logging imports |
     | `plugin-sdk/host-runtime` | Hostname and SCP host normalization helpers |
@@ -352,8 +348,7 @@ and pairing-path families.
     | `plugin-sdk/memory-core-engine-runtime` | Memory index/search runtime facade |
     | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine exports |
     | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding contracts, registry access, local provider, and generic batch/remote helpers |
-    | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine exports; use `memory-core-host-engine-session-transcripts` for SQLite transcript indexing helpers |
-    | `plugin-sdk/memory-core-host-engine-session-transcripts` | Memory host SQLite session transcript indexing exports |
+    | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine exports |
     | `plugin-sdk/memory-core-host-engine-storage` | Memory host storage engine exports |
     | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers |
     | `plugin-sdk/memory-core-host-query` | Memory host query helpers |

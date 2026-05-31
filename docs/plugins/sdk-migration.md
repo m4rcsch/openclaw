@@ -586,7 +586,6 @@ releases.
   | `plugin-sdk/reply-reference` | Reply reference planning | `createReplyReferencePlanner` |
   | `plugin-sdk/reply-chunking` | Reply chunk helpers | Text/markdown chunking helpers |
   | `plugin-sdk/session-store-runtime` | Session row helpers | SQLite-backed session row, session-key, updated-at, and transcript row helpers |
-  | `plugin-sdk/sqlite-runtime` | SQLite helpers | Focused database open/path helpers for first-party runtime and migration tests |
   | `plugin-sdk/state-paths` | State path helpers | Config, credentials, migration, and explicit operator-file path helpers; runtime state and caches belong in SQLite stores |
   | `plugin-sdk/routing` | Routing/session-key helpers | `resolveAgentRoute`, `buildAgentSessionKey`, `resolveDefaultAgentBoundAccountId`, session-key normalization helpers |
   | `plugin-sdk/status-helpers` | Channel status helpers | Channel/account status summary builders, runtime-state defaults, issue metadata helpers |
@@ -654,8 +653,7 @@ releases.
   | `plugin-sdk/memory-core-engine-runtime` | Memory engine runtime facade | Memory index/search runtime facade |
   | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine | Memory host foundation engine exports |
   | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding engine | Memory embedding contracts, registry access, local provider, and generic batch/remote helpers; concrete remote providers live in their owning plugins |
-  | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine | Memory host QMD engine exports; new code should use `memory-core-host-engine-session-transcripts` for SQLite transcript indexing helpers |
-  | `plugin-sdk/memory-core-host-engine-session-transcripts` | Memory host SQLite session transcript engine | Memory host SQLite session transcript indexing exports |
+  | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine | Memory host QMD engine exports |
   | `plugin-sdk/memory-core-host-engine-storage` | Memory host storage engine | Memory host storage engine exports |
   | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers | Memory host multimodal helpers |
   | `plugin-sdk/memory-core-host-query` | Memory host query helpers | Memory host query helpers |
