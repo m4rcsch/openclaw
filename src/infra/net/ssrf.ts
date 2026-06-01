@@ -466,6 +466,8 @@ export function createPinnedLookup(params: {
     family: address.includes(":") ? 6 : 4,
   }));
   const ipv4Records = records.filter((entry) => entry.family === 4);
+  // Undici's automatic lookup path should try pinned IPv4 addresses first when available;
+  // explicit family requests below can still opt into IPv6 records.
   const automaticRecords = ipv4Records.length > 0 ? ipv4Records : records;
   let index = 0;
 
