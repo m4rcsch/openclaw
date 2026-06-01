@@ -10,17 +10,29 @@ import type {
 import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
 
 export type GatewayConnectionAuthOptions = {
+  /** Runtime config snapshot containing local and remote Gateway auth settings. */
   config: OpenClawConfig;
+  /** Env snapshot used for OPENCLAW_GATEWAY_* credential fallbacks. */
   env?: NodeJS.ProcessEnv;
+  /** Explicit caller credentials that take precedence over config/env sources. */
   explicitAuth?: ExplicitGatewayAuth;
+  /** Runtime URL override used to force remote/local credential selection. */
   urlOverride?: string;
+  /** Identifies whether urlOverride came from CLI args or env. */
   urlOverrideSource?: "cli" | "env";
+  /** Explicitly choose local or remote credential mode independent of config. */
   modeOverride?: GatewayCredentialMode;
+  /** Source precedence for local token credentials. */
   localTokenPrecedence?: GatewayCredentialPrecedence;
+  /** Source precedence for local password credentials. */
   localPasswordPrecedence?: GatewayCredentialPrecedence;
+  /** Source precedence for remote token credentials. */
   remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
+  /** Source precedence for remote password credentials. */
   remotePasswordPrecedence?: GatewayRemoteCredentialPrecedence;
+  /** Whether remote token lookup can fall back to local/env sources. */
   remoteTokenFallback?: GatewayRemoteCredentialFallback;
+  /** Whether remote password lookup can fall back to local/env sources. */
   remotePasswordFallback?: GatewayRemoteCredentialFallback;
 };
 
