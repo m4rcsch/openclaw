@@ -268,6 +268,28 @@ export function activateSmokePlugin(config, pluginId, channels = []) {
   };
 }
 
+function channelActivationEnvName(channel) {
+  return `${channel
+    .replace(/[^a-z0-9]+/giu, "_")
+    .replace(/^_+|_+$/gu, "")
+    .toUpperCase()}_RUNTIME_SMOKE`;
+}
+
+export function withManifestChannelActivationEnv(env, channels = []) {
+  const nextEnv = { ...env };
+  for (const channel of channels) {
+    if (!isNonEmptyString(channel)) {
+      continue;
+    }
+    const key = channelActivationEnvName(channel);
+    if (key === "_RUNTIME_SMOKE") {
+      continue;
+    }
+    nextEnv[key] ??= "1";
+  }
+  return nextEnv;
+}
+
 function buildPluginPlan(manifest) {
   const contracts =
     manifest.contracts && typeof manifest.contracts === "object" ? manifest.contracts : {};
@@ -659,6 +681,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
     activateSmokePlugin(readConfig(), pluginId, plan.channels),
     port,
   );
+  const env = withManifestChannelActivationEnv(process.env, plan.channels);
   if (plan.speechProviders[0]) {
     const provider = plan.speechProviders[0];
     config.messages = {
@@ -682,7 +705,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
     entrypoint,
     port,
     logPath,
-    env: process.env,
+    env,
     skipChannels: plan.channels.length === 0,
   });
   try {
@@ -690,12 +713,12 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
     await assertBaseGatewayProbes({
       entrypoint,
       port,
-      env: process.env,
+      env,
       pluginId,
       allowDegradedReadyz: plan.channels.length > 0,
     });
-    await runManifestProbes(plan, { entrypoint, port, env: process.env, pluginId });
-    await runWatchdog({ child, logPath, port, entrypoint, env: process.env, pluginId });
+    await runManifestProbes(plan, { entrypoint, port, env, pluginId });
+    await runWatchdog({ child, logPath, port, entrypoint, env, pluginId });
     console.log(`Runtime smoke passed for ${pluginId}`);
   } catch (error) {
     console.error(tailFile(logPath));
