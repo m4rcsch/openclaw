@@ -38,11 +38,13 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 
+/** Client-IP trust policy used only for hook auth throttling. */
 export type HookClientIpConfig = Readonly<{
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
 }>;
 
+/** HTTP hook handler return value tells the outer Gateway router whether it consumed the request. */
 export type HooksRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 type HookDispatchers = {
@@ -81,6 +83,7 @@ function resolveMappedHookExternalContentSource(params: {
   return resolveHookExternalContentSourceFromSession(params.sessionKey) ?? "webhook";
 }
 
+/** Create the HTTP ingress handler for /hooks routes and configured hook mappings. */
 export function createHooksRequestHandler(
   opts: {
     getHooksConfig: () => HooksConfigResolved | null;
@@ -137,6 +140,8 @@ export function createHooksRequestHandler(
       .update(params.token ?? "", "utf8")
       .digest("hex");
     const idempotencyFingerprint = createHash("sha256").update(idem, "utf8").digest("hex");
+    // Scope idempotency to the effective dispatch payload, not just the header,
+    // so reused provider keys across routes or agents cannot collapse runs.
     const scopeFingerprint = createHash("sha256")
       .update(
         JSON.stringify({
@@ -185,6 +190,8 @@ export function createHooksRequestHandler(
       return false;
     }
 
+    // Query-string tokens leak through logs and referrers; keep hooks on header
+    // auth even before method/body validation.
     if (url.searchParams.has("token")) {
       res.statusCode = 400;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -315,6 +322,8 @@ export function createHooksRequestHandler(
         targetAgentId: effectiveTargetAgentId,
       });
       const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+      // Re-check prefixes after agent-session rebinding because the effective
+      // dispatch key can differ from the caller-supplied request key.
       if (
         allowedPrefixes &&
         !isSessionKeyAllowedByPrefix(normalizedDispatchSessionKey, allowedPrefixes)
@@ -372,6 +381,8 @@ export function createHooksRequestHandler(
           }
           const sessionKey = resolveHookSessionKey({
             hooksConfig,
+            // Mapped session keys from templates/transforms can read request
+            // data, so route them through the stricter request-key policy.
             source:
               mapped.action.sessionKeySource === "static" ? "mapping-static" : "mapping-templated",
             sessionKey: mapped.action.sessionKey,
