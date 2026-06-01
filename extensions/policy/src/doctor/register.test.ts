@@ -612,6 +612,57 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
+  it("satisfies mixed-case required feed source ids", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        feeds: {
+          sources: {
+            require: ["Company-Approved"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(
+      ctx(configPath, {
+        ...cfgWithPolicy(),
+        plugins: {
+          entries: {
+            policy: {
+              enabled: true,
+              config: { enabled: true },
+            },
+            feeds: {
+              enabled: true,
+              config: {
+                enabled: true,
+                sources: [
+                  {
+                    id: "Company-Approved",
+                    url: "https://feeds.example.com/company.json",
+                    trust: "pinned",
+                    integrity:
+                      "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "policy/feeds-required-source-missing" }),
+      ]),
+    );
+  });
+
   it("checks configured feed source trust posture against policy", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");
@@ -827,6 +878,56 @@ describe("registerPolicyDoctorChecks", () => {
         expect.objectContaining({
           checkId: "policy/feeds-required-source-missing",
         }),
+      ]),
+    );
+  });
+
+  it("satisfies required feed sources when feeds is enabled by plugin allowlist", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        feeds: {
+          sources: {
+            require: ["company-approved"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(
+      ctx(configPath, {
+        ...cfgWithPolicy(),
+        plugins: {
+          allow: ["feeds", "policy"],
+          entries: {
+            policy: {
+              enabled: true,
+              config: { enabled: true },
+            },
+            feeds: {
+              config: {
+                sources: [
+                  {
+                    id: "company-approved",
+                    url: "https://feeds.example.com/company.json",
+                    trust: "pinned",
+                    integrity:
+                      "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "policy/feeds-required-source-missing" }),
       ]),
     );
   });

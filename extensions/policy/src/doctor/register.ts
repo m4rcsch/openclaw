@@ -3954,7 +3954,7 @@ function feedSourceFindings(
   if (shapeFinding !== undefined) {
     return [];
   }
-  const required = readStringList(policy, ["feeds", "sources", "require"]);
+  const required = readStringList(policy, ["feeds", "sources", "require"], { lowercase: false });
   const requirePinned = readPolicyBoolean(policy, ["feeds", "sources", "requirePinned"]) === true;
   const allowUnsigned = readPolicyBoolean(policy, ["feeds", "sources", "allowUnsigned"]) !== false;
   if (required.length === 0 && !requirePinned && allowUnsigned) {
