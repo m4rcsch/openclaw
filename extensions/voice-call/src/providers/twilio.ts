@@ -76,6 +76,7 @@ type TwilioProviderConfig = {
   authToken?: string;
 };
 
+/** Twilio Voice provider for REST call control, TwiML callback routing, and media streams. */
 export class TwilioProvider implements VoiceCallProvider {
   readonly name = "twilio" as const;
 
@@ -85,23 +86,23 @@ export class TwilioProvider implements VoiceCallProvider {
   private readonly callWebhookUrls = new Map<string, string>();
   private readonly options: TwilioProviderOptions;
 
-  /** Current public webhook URL (set when tunnel starts or from config) */
+  /** Provider-visible webhook origin used for signature verification and generated stream URLs. */
   private currentPublicUrl: string | null = null;
 
-  /** Optional telephony TTS provider for streaming TTS */
+  /** Optional streaming TTS adapter used before falling back to TwiML redirects. */
   private ttsProvider: TelephonyTtsProvider | null = null;
 
-  /** Optional media stream handler for sending audio */
+  /** Optional media bridge used to enqueue outbound audio to live Twilio streams. */
   private mediaStreamHandler: MediaStreamHandler | null = null;
 
-  /** Map of call SID to stream SID for media streams */
+  /** Current Twilio streamSid per callSid; outbound media/clear/mark frames require it. */
   private callStreamMap = new Map<string, string>();
-  /** Per-call tokens for media stream authentication */
+  /** Per-call stream tokens validated before accepting Twilio media websocket starts. */
   private streamAuthTokens = new Map<string, string>();
 
-  /** Storage for TwiML content (for notify mode with URL-based TwiML) */
+  /** One-shot TwiML payloads consumed by initial notify-mode callbacks. */
   private readonly twimlStorage = new Map<string, string>();
-  /** Track notify-mode calls to avoid streaming on follow-up callbacks */
+  /** Notify-mode call ids that should not be upgraded into streaming conversations. */
   private readonly notifyCalls = new Set<string>();
   private readonly activeStreamCalls = new Set<string>();
 
@@ -875,10 +876,6 @@ export class TwilioProvider implements VoiceCallProvider {
     }
   }
 }
-
-// -----------------------------------------------------------------------------
-// Twilio-specific types
-// -----------------------------------------------------------------------------
 
 interface TwilioCallResponse {
   sid: string;
