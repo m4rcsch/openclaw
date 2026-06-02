@@ -1,6 +1,7 @@
 import { expect } from "vitest";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 
+/** Parameter shape shared by payload tests and the production payload builder. */
 export type BuildPayloadParams = Parameters<typeof buildEmbeddedRunPayloads>[0];
 type RunPayloads = ReturnType<typeof buildEmbeddedRunPayloads>;
 
