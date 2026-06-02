@@ -5,9 +5,13 @@ type GuardedJsonApiRequestParams = {
   method: "GET" | "POST" | "DELETE" | "PUT" | "PATCH";
   headers: Record<string, string>;
   body?: Record<string, unknown>;
+  /** Treat 404 as an idempotent "already gone" result for delete/status probes. */
   allowNotFound?: boolean;
+  /** Exact provider API hostnames permitted after SSRF resolution and redirect checks. */
   allowedHostnames: string[];
+  /** Audit label emitted by the network guard for provider-specific API calls. */
   auditContext: string;
+  /** Prefix preserved on thrown errors so callers can attribute provider failures. */
   errorPrefix: string;
 };
 
