@@ -78,6 +78,7 @@ function normalizeSpokenText(value: string): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+/** Recovers the required spoken JSON object even when the model wraps it in fences or prose. */
 function tryParseSpokenJson(text: string): string | null {
   const candidates: string[] = [];
   const trimmed = text.trim();
@@ -152,6 +153,7 @@ function isLikelyMetaReasoningParagraph(paragraph: string): boolean {
   return false;
 }
 
+/** Drops obvious planning text while preserving conversational fallback output for the caller. */
 function sanitizePlainSpokenText(text: string): string | null {
   const withoutCodeFences = text.replace(/```[\s\S]*?```/g, " ").trim();
   if (!withoutCodeFences) {
@@ -169,6 +171,7 @@ function sanitizePlainSpokenText(text: string): string | null {
   return normalizeSpokenText(paragraphs.join(" "));
 }
 
+/** Extracts only caller-safe speech segments from mixed agent text, reasoning, and error payloads. */
 function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string | null {
   const spokenSegments: string[] = [];
 
@@ -201,6 +204,7 @@ function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string
   return spokenSegments.length > 0 ? spokenSegments.join(" ").trim() : null;
 }
 
+/** Scopes voice sessions into agent sandboxes so phone/call keys cannot collide across agents. */
 function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): string {
   const trimmed = sessionKey.trim();
   if (trimmed.toLowerCase().startsWith("agent:")) {
