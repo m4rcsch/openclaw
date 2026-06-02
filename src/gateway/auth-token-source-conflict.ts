@@ -14,6 +14,7 @@ export type GatewayAuthTokenSourceConflict = {
   diagnostic: string;
 };
 
+/** Builds the audit/status warning for ambient env tokens that can shadow local config tokens. */
 export function resolveGatewayAuthTokenSourceConflict(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -23,6 +24,8 @@ export function resolveGatewayAuthTokenSourceConflict(params: {
     return null;
   }
 
+  // The managed gateway service intentionally prefers persisted config, so its own
+  // process env is not treated as a shell/client shadowing risk.
   if (params.env.OPENCLAW_SERVICE_KIND?.trim() === GATEWAY_SERVICE_KIND) {
     return null;
   }
