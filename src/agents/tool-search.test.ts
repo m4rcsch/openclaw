@@ -329,6 +329,75 @@ describe("Tool Search", () => {
     expect(clientEntry?.source).toBe("client");
   });
 
+  it("skips unreadable tool schemas when compacting the search catalog", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const readable = pluginTool("fake_readable_schema", "Readable tool");
+    const throwingGetter = pluginTool("fake_schema_getter", "Throws while reading parameters");
+    Object.defineProperty(throwingGetter, "parameters", {
+      configurable: true,
+      get() {
+        throw new Error("fuzzplugin parameters getter exploded");
+      },
+    });
+    const nestedGetter = pluginTool("fake_nested_schema_getter", "Throws while walking schema");
+    Object.defineProperty(
+      (nestedGetter.parameters as { properties: Record<string, unknown> }).properties,
+      "boom",
+      {
+        enumerable: true,
+        get() {
+          throw new Error("fuzzplugin nested schema getter exploded");
+        },
+      },
+    );
+
+    const compacted = applyToolSearchCatalog({
+      tools: [codeTool, readable, throwingGetter, nestedGetter],
+      config: { tools: { toolSearch: true } } as never,
+      sessionId: "session-unreadable-catalog-schema",
+    });
+
+    expect(compacted.catalogRegistered).toBe(true);
+    expect(compacted.catalogToolCount).toBe(1);
+    expect(
+      testing.sessionCatalogs
+        .get("session:session-unreadable-catalog-schema")
+        ?.entries.map((entry) => entry.name),
+    ).toEqual(["fake_readable_schema"]);
+  });
+
+  it("skips unreadable client tool schemas when appending to the search catalog", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const config = { tools: { toolSearch: true } } as never;
+    applyToolSearchCatalog({
+      tools: [codeTool],
+      config,
+      sessionId: "session-client-unreadable-schema",
+    });
+
+    const readable = fakeTool("client_readable_schema", "Readable client tool");
+    const unreadable = fakeTool("client_unreadable_schema", "Unreadable client tool");
+    Object.defineProperty(unreadable, "parameters", {
+      configurable: true,
+      get() {
+        throw new Error("client parameters getter exploded");
+      },
+    });
+    const compacted = addClientToolsToToolSearchCatalog({
+      tools: [readable, unreadable],
+      config,
+      sessionId: "session-client-unreadable-schema",
+    });
+
+    expect(compacted.tools).toEqual([]);
+    expect(compacted.catalogToolCount).toBe(1);
+    expect(
+      testing.sessionCatalogs
+        .get("session:session-client-unreadable-schema")
+        ?.entries.map((entry) => entry.name),
+    ).toEqual(["client_readable_schema"]);
+  });
+
   it("wraps cataloged OpenClaw tools with before_tool_call hooks", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const target = pluginTool("fake_hooked", "Run a hook-aware fake tool");

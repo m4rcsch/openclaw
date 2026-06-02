@@ -509,6 +509,32 @@ function stableJsonFingerprint(value: unknown, seen = new WeakSet<object>()): st
   return `{${entries.join(",")}}`;
 }
 
+function canReadStableJsonFingerprint(value: unknown): boolean {
+  try {
+    stableJsonFingerprint(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function canCatalogEntryBeProjected(entry: ToolSearchCatalogEntry): boolean {
+  try {
+    void entry.id;
+    void entry.source;
+    void entry.sourceName;
+    void entry.name;
+    void entry.label;
+    void entry.description;
+    void entry.tool;
+    return (
+      canReadStableJsonFingerprint(entry.mcp) && canReadStableJsonFingerprint(entry.parameters)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function catalogToolIdentity(tool: CatalogTool): number {
   const existing = catalogToolIdentities.get(tool);
   if (existing !== undefined) {
@@ -661,6 +687,19 @@ function toCatalogEntry(
     parameters: tool.parameters,
     tool: catalogTool,
   };
+}
+
+function tryToCatalogEntry(
+  tool: CatalogTool,
+  sourceOverride?: CatalogSource,
+  hookContext?: HookContext,
+): ToolSearchCatalogEntry | undefined {
+  try {
+    const entry = toCatalogEntry(tool, sourceOverride, hookContext);
+    return canCatalogEntryBeProjected(entry) ? entry : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function shouldCatalogTool(tool: AnyAgentTool): boolean {
@@ -890,10 +929,10 @@ export function registerToolSearchCatalog(params: {
     ? (params.catalogRef?.current ?? (primaryKey ? sessionCatalogs.get(primaryKey) : undefined))
     : undefined;
   const byId = new Map<string, ToolSearchCatalogEntry>();
-  for (const entry of prior?.entries ?? []) {
+  for (const entry of prior?.entries.filter(canCatalogEntryBeProjected) ?? []) {
     byId.set(entry.id, entry);
   }
-  for (const entry of params.entries) {
+  for (const entry of params.entries.filter(canCatalogEntryBeProjected)) {
     byId.set(entry.id, entry);
     byId.set(entry.name, entry);
   }
@@ -1276,7 +1315,10 @@ export function applyToolCatalogCompaction(params: {
       continue;
     }
     if (shouldCatalog(tool)) {
-      catalog.push(toCatalogEntry(tool, undefined, params.toolHookContext));
+      const entry = tryToCatalogEntry(tool, undefined, params.toolHookContext);
+      if (entry) {
+        catalog.push(entry);
+      }
       continue;
     }
     visible.push(tool);
@@ -1365,16 +1407,19 @@ export function addClientToolsToToolCatalog(params: {
   if (!existing) {
     return { tools: params.tools, compacted: false, catalogToolCount: 0 };
   }
+  const entries = params.tools
+    .map((tool) => tryToCatalogEntry(tool, "client"))
+    .filter((entry): entry is ToolSearchCatalogEntry => entry !== undefined);
   registerToolSearchCatalog({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     runId: params.runId,
     catalogRef: params.catalogRef,
-    entries: params.tools.map((tool) => toCatalogEntry(tool, "client")),
+    entries,
     append: true,
   });
-  return { tools: [], compacted: params.tools.length > 0, catalogToolCount: params.tools.length };
+  return { tools: [], compacted: params.tools.length > 0, catalogToolCount: entries.length };
 }
 
 function toJsonSafe(value: unknown): unknown {
