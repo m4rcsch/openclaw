@@ -45,6 +45,10 @@ type LogLike = {
   warn(message: string): void;
 };
 
+/**
+ * Creates the auth-profile controller used by an embedded run to initialize
+ * credentials, rotate profiles, and refresh provider runtime auth safely.
+ */
 export function createEmbeddedRunAuthController(params: {
   config: RunEmbeddedAgentParams["config"];
   agentDir: string;
@@ -199,6 +203,9 @@ export function createEmbeddedRunAuthController(params: {
         activeRuntimeAuthState.profileId !== refreshProfileId ||
         activeRuntimeAuthState.sourceApiKey.trim() !== sourceApiKey
       ) {
+        // Profile rotation or source credential changes can finish before an
+        // older refresh promise resolves; ignore that stale token instead of
+        // overwriting the active provider auth.
         params.log.debug(
           `Ignoring stale runtime auth refresh for ${runtimeModel.provider}; auth state advanced before ${reason} refresh completed.`,
         );
