@@ -155,30 +155,37 @@ export class TwilioProvider implements VoiceCallProvider {
     }
   }
 
+  /** Updates the externally reachable webhook origin after tunnel/exposure setup. */
   setPublicUrl(url: string): void {
     this.currentPublicUrl = url;
   }
 
+  /** Returns the public origin currently used for generated callbacks and stream URLs. */
   getPublicUrl(): string | null {
     return this.currentPublicUrl;
   }
 
+  /** Injects the telephony TTS adapter used for live media-stream playback. */
   setTTSProvider(provider: TelephonyTtsProvider): void {
     this.ttsProvider = provider;
   }
 
+  /** Injects the media stream bridge that owns outbound audio queueing and barge-in clears. */
   setMediaStreamHandler(handler: MediaStreamHandler): void {
     this.mediaStreamHandler = handler;
   }
 
+  /** Associates a Twilio stream SID with a call SID so later playback can target the socket. */
   registerCallStream(callSid: string, streamSid: string): void {
     this.callStreamMap.set(callSid, streamSid);
   }
 
+  /** Returns whether a live stream is registered for the Twilio call SID. */
   hasRegisteredStream(callSid: string): boolean {
     return this.callStreamMap.has(callSid);
   }
 
+  /** Removes a stream mapping, preserving newer reconnect streams when an old stop arrives late. */
   unregisterCallStream(callSid: string, streamSid?: string): void {
     const currentStreamSid = this.callStreamMap.get(callSid);
     if (!currentStreamSid) {
@@ -196,10 +203,12 @@ export class TwilioProvider implements VoiceCallProvider {
     this.activeStreamCalls.delete(callSid);
   }
 
+  /** True when TwiML should connect new calls to the media stream bridge instead of static TwiML. */
   isConversationStreamConnectEnabled(): boolean {
     return Boolean(this.mediaStreamHandler && this.getStreamUrl());
   }
 
+  /** Validates a one-time media-stream token before accepting Twilio's websocket start frame. */
   isValidStreamToken(callSid: string, token?: string): boolean {
     const expected = this.streamAuthTokens.get(callSid);
     if (!expected || !token) {
