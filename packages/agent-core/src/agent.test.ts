@@ -1,7 +1,12 @@
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Agent } from "./agent.js";
-import { createAssistantMessageEventStream, type AssistantMessage, type Context } from "./llm.js";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+  type Context,
+  type Model,
+} from "./llm.js";
 import type { AgentMessage, AgentTool, StreamFn } from "./types.js";
 
 const model = {
@@ -16,6 +21,19 @@ const model = {
   contextWindow: 1000,
   maxTokens: 1000,
 };
+
+function makeHostileModel(): Model {
+  const hostile = { ...model } satisfies Model;
+  for (const key of ["api", "provider", "id"] as const) {
+    Object.defineProperty(hostile, key, {
+      enumerable: true,
+      get() {
+        throw new Error(`revoked ${key}`);
+      },
+    });
+  }
+  return hostile;
+}
 
 const assistantMessage: AssistantMessage = {
   role: "assistant",
@@ -60,6 +78,10 @@ function createStreamFn(contexts: Context[]): StreamFn {
     return stream;
   };
 }
+
+const failingStreamFn: StreamFn = async () => {
+  throw new Error("provider exploded");
+};
 
 function userMessage(text: string): AgentMessage {
   return { role: "user", content: text, timestamp: 1 };
@@ -149,5 +171,26 @@ describe("Agent tool snapshots", () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('skipped invalid agent state tool "bad_lookup": revoked parameters'),
     );
+  });
+});
+
+describe("Agent failure messages", () => {
+  it("keeps run-failure state reachable with hostile model identity", async () => {
+    const agent = new Agent({
+      initialState: { model: makeHostileModel() },
+      streamFn: failingStreamFn,
+    });
+
+    await agent.prompt("hello");
+
+    expect(agent.state.errorMessage).toBe("provider exploded");
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      api: "unknown",
+      provider: "unknown",
+      model: "unknown",
+      stopReason: "error",
+      errorMessage: "provider exploded",
+    });
   });
 });

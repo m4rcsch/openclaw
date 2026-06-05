@@ -9,6 +9,7 @@ import type {
   Transport,
 } from "../../llm-core/src/index.js";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
+import { createAgentFailureMessage } from "./failure-message.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import { snapshotAgentTools } from "./tool-snapshot.js";
 import type {
@@ -36,15 +37,6 @@ function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
       message.role === "user" || message.role === "assistant" || message.role === "toolResult",
   );
 }
-
-const EMPTY_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 
 const DEFAULT_MODEL = {
   id: "unknown",
@@ -541,17 +533,7 @@ export class Agent {
   }
 
   private async handleRunFailure(error: unknown, aborted: boolean): Promise<void> {
-    const failureMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "" }],
-      api: this.mutableState.model.api,
-      provider: this.mutableState.model.provider,
-      model: this.mutableState.model.id,
-      usage: EMPTY_USAGE,
-      stopReason: aborted ? "aborted" : "error",
-      errorMessage: error instanceof Error ? error.message : String(error),
-      timestamp: Date.now(),
-    } satisfies AgentMessage;
+    const failureMessage = createAgentFailureMessage(this.mutableState.model, error, aborted);
     await this.processEvents({ type: "message_start", message: failureMessage });
     await this.processEvents({ type: "message_end", message: failureMessage });
     await this.processEvents({ type: "turn_end", message: failureMessage, toolResults: [] });
