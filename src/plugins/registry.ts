@@ -2562,13 +2562,70 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const readSessionSchedulerJobFields = (
+    record: PluginRecord,
+    job: PluginSessionSchedulerJobRegistration,
+  ):
+    | {
+        id: unknown;
+        sessionKey: unknown;
+        kind: unknown;
+        description: unknown;
+        cleanup: unknown;
+      }
+    | undefined => {
+    let id: unknown;
+    try {
+      id = job.id;
+      return {
+        id,
+        sessionKey: job.sessionKey,
+        kind: job.kind,
+        description: job.description,
+        cleanup: job.cleanup,
+      };
+    } catch (error) {
+      const normalizedId = normalizeOptionalHostHookString(id);
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message:
+          `session scheduler job registration has unreadable fields` +
+          `${normalizedId ? `: ${normalizedId}` : ""}: ${formatErrorMessage(error)}`,
+      });
+      return undefined;
+    }
+  };
+
+  const createSessionSchedulerJobSnapshot = (params: {
+    id: string;
+    sessionKey: string;
+    kind: string;
+    description: unknown;
+    cleanup: unknown;
+  }): PluginSessionSchedulerJobRegistration => ({
+    id: params.id,
+    sessionKey: params.sessionKey,
+    kind: params.kind,
+    ...(params.description !== undefined ? { description: params.description as string } : {}),
+    ...(params.cleanup !== undefined
+      ? { cleanup: params.cleanup as PluginSessionSchedulerJobRegistration["cleanup"] }
+      : {}),
+  });
+
   const registerSessionSchedulerJob = (
     record: PluginRecord,
     job: PluginSessionSchedulerJobRegistration,
   ) => {
-    const jobId = normalizeHostHookString(job.id);
-    const sessionKey = normalizeHostHookString(job.sessionKey);
-    const kind = normalizeHostHookString(job.kind);
+    const fields = readSessionSchedulerJobFields(record, job);
+    if (!fields) {
+      return undefined;
+    }
+    const jobId = normalizeHostHookString(fields.id);
+    const sessionKey = normalizeHostHookString(fields.sessionKey);
+    const kind = normalizeHostHookString(fields.kind);
+    const cleanup = fields.cleanup;
     if (
       jobId &&
       (registry.sessionSchedulerJobs ?? []).some(
@@ -2592,7 +2649,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return undefined;
     }
-    if (job.cleanup !== undefined && typeof job.cleanup !== "function") {
+    if (cleanup !== undefined && typeof cleanup !== "function") {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -2601,11 +2658,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return undefined;
     }
+    const normalizedJob = createSessionSchedulerJobSnapshot({
+      id: jobId,
+      sessionKey,
+      kind,
+      description: fields.description,
+      cleanup,
+    });
     if (registryParams.activateGlobalSideEffects === false) {
       (registry.sessionSchedulerJobs ??= []).push({
         pluginId: record.id,
         pluginName: record.name,
-        job: { ...job, id: jobId, sessionKey, kind },
+        job: normalizedJob,
         source: record.source,
         rootDir: record.rootDir,
       });
@@ -2615,7 +2679,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       ownerRegistry: registry,
-      job: { ...job, id: jobId, sessionKey, kind },
+      job: normalizedJob,
     });
     if (!handle) {
       pushDiagnostic({
@@ -2629,7 +2693,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     (registry.sessionSchedulerJobs ??= []).push({
       pluginId: record.id,
       pluginName: record.name,
-      job: { ...job, id: handle.id, sessionKey: handle.sessionKey, kind: handle.kind },
+      job: createSessionSchedulerJobSnapshot({
+        id: handle.id,
+        sessionKey: handle.sessionKey,
+        kind: handle.kind,
+        description: fields.description,
+        cleanup,
+      }),
       generation: getPluginSessionSchedulerJobGeneration({
         pluginId: record.id,
         jobId: handle.id,

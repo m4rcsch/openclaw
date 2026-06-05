@@ -59,6 +59,28 @@ function normalizeNamespace(value: string | undefined): string {
   return (value ?? "").trim();
 }
 
+function readSessionSchedulerJobFields(job: PluginSessionSchedulerJobRegistration):
+  | {
+      id: unknown;
+      sessionKey: unknown;
+      kind: unknown;
+      description: unknown;
+      cleanup: unknown;
+    }
+  | undefined {
+  try {
+    return {
+      id: job.id,
+      sessionKey: job.sessionKey,
+      kind: job.kind,
+      description: job.description,
+      cleanup: job.cleanup,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function copyJsonValue(value: PluginJsonValue): PluginJsonValue {
   return structuredClone(value);
 }
@@ -367,10 +389,17 @@ export function registerPluginSessionSchedulerJob(params: {
   job: PluginSessionSchedulerJobRegistration;
   ownerRegistry?: PluginRegistry;
 }): PluginSessionSchedulerJobHandle | undefined {
-  const id = normalizeOptionalString(params.job.id);
-  const sessionKey = normalizeOptionalString(params.job.sessionKey);
-  const kind = normalizeOptionalString(params.job.kind);
-  if (!id || !sessionKey || !kind) {
+  const fields = readSessionSchedulerJobFields(params.job);
+  const id = normalizeOptionalString(typeof fields?.id === "string" ? fields.id : undefined);
+  const sessionKey = normalizeOptionalString(
+    typeof fields?.sessionKey === "string" ? fields.sessionKey : undefined,
+  );
+  const kind = normalizeOptionalString(typeof fields?.kind === "string" ? fields.kind : undefined);
+  const cleanup = fields?.cleanup;
+  if (!fields || !id || !sessionKey || !kind) {
+    return undefined;
+  }
+  if (cleanup !== undefined && typeof cleanup !== "function") {
     return undefined;
   }
   const state = getPluginHostRuntimeState();
@@ -379,7 +408,15 @@ export function registerPluginSessionSchedulerJob(params: {
   jobs.set(id, {
     pluginId: params.pluginId,
     pluginName: params.pluginName,
-    job: { ...params.job, id, sessionKey, kind },
+    job: {
+      id,
+      sessionKey,
+      kind,
+      ...(fields.description !== undefined ? { description: fields.description as string } : {}),
+      ...(cleanup !== undefined
+        ? { cleanup: cleanup as PluginSessionSchedulerJobRegistration["cleanup"] }
+        : {}),
+    },
     generation,
     ...(params.ownerRegistry ? { ownerRegistry: params.ownerRegistry } : {}),
   });
