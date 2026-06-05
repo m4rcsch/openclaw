@@ -1927,7 +1927,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     service: OpenClawGatewayDiscoveryService,
   ) => {
-    const id = service.id.trim();
+    const idField = readGatewayDiscoveryServiceIdField(record, service);
+    if (idField === undefined) {
+      return;
+    }
+    const id = normalizeOptionalString(idField) ?? "";
     if (!id) {
       return;
     }
@@ -1944,14 +1948,63 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const advertise = readGatewayDiscoveryServiceAdvertiseField(record, service, id);
+    if (typeof advertise !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `gateway discovery service registration missing advertise handler: ${id}`,
+      });
+      return;
+    }
     record.gatewayDiscoveryServiceIds.push(id);
     registry.gatewayDiscoveryServices.push({
       pluginId: record.id,
       pluginName: record.name,
-      service,
+      service: {
+        id,
+        advertise: (ctx) =>
+          (advertise as OpenClawGatewayDiscoveryService["advertise"]).call(service, ctx),
+      },
       source: record.source,
       rootDir: record.rootDir,
     });
+  };
+
+  const readGatewayDiscoveryServiceIdField = (
+    record: PluginRecord,
+    service: OpenClawGatewayDiscoveryService,
+  ): unknown => {
+    try {
+      return service.id;
+    } catch (error) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `gateway discovery service registration has unreadable id: ${formatErrorMessage(error)}`,
+      });
+      return undefined;
+    }
+  };
+
+  const readGatewayDiscoveryServiceAdvertiseField = (
+    record: PluginRecord,
+    service: OpenClawGatewayDiscoveryService,
+    id: string,
+  ): unknown => {
+    try {
+      return service.advertise;
+    } catch (error) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `gateway discovery service registration has unreadable advertise handler: ${id}: ${formatErrorMessage(error)}`,
+      });
+      return undefined;
+    }
   };
 
   const registerCommand = (record: PluginRecord, command: OpenClawPluginCommandDefinition) => {
