@@ -528,7 +528,8 @@ describe("readRemoteMediaBuffer", () => {
         (_input: RequestInfo | URL, init?: RequestInit) =>
           new Promise<Response>((_resolve, reject) => {
             init?.signal?.addEventListener("abort", () => {
-              reject(init.signal?.reason);
+              const reason = init.signal?.reason;
+              reject(reason instanceof Error ? reason : new Error("request aborted"));
             });
           }),
       );

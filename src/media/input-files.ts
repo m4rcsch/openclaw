@@ -293,7 +293,7 @@ export async function fetchWithGuard(params: {
   }, params.timeoutMs);
   unrefTimer(timeout);
   let response: Response;
-  let dispatcher: Dispatcher | null = null;
+  let dispatcher: Dispatcher | null | undefined;
   try {
     dispatcher = await createInputFetchDispatcher({
       url,
@@ -342,7 +342,7 @@ export async function fetchWithGuard(params: {
     return { buffer, mimeType, contentType };
   } finally {
     clearTimeout(timeout);
-    await closeDispatcher(dispatcher);
+    await closeDispatcher(dispatcher ?? null);
   }
 }
 

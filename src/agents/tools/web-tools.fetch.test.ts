@@ -385,7 +385,8 @@ describe("web_fetch extraction fallbacks", () => {
             init?.signal?.addEventListener(
               "abort",
               () => {
-                reject(init.signal?.reason);
+                const reason = init.signal?.reason;
+                reject(reason instanceof Error ? reason : new Error("request aborted"));
               },
               { once: true },
             );
