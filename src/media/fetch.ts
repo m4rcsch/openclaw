@@ -318,8 +318,8 @@ async function createMediaFetchDispatcher(params: {
   if (dispatcherPolicy?.mode === "explicit-proxy" && trustExplicitProxyDns === true) {
     return createMediaFetchDispatcherWithoutPinnedDns(dispatcherPolicy, timeoutMs);
   }
-  const canUsePinnedDns =
-    attempt.lookupFn !== undefined || (fetchImpl === undefined && !isMockedFetch(globalThis.fetch));
+  const resolvedFetch = fetchImpl ?? globalThis.fetch;
+  const canUsePinnedDns = attempt.lookupFn !== undefined || !isMockedFetch(resolvedFetch);
   if (!canUsePinnedDns) {
     return createMediaFetchDispatcherWithoutPinnedDns(dispatcherPolicy, timeoutMs);
   }
