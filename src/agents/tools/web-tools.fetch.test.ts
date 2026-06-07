@@ -1,6 +1,5 @@
 // web_fetch tool tests cover extraction fallbacks, progress events, provider
 // fallback behavior, and external-content wrapping.
-import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../../infra/net/ssrf.js";
 import { resolveRequestUrl } from "../../plugin-sdk/request-url.js";
@@ -377,6 +376,43 @@ describe("web_fetch extraction fallbacks", () => {
     }
   });
 
+  it("aborts direct fetches at the configured timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = installMockFetch(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => {
+                reject(init.signal?.reason);
+              },
+              { once: true },
+            );
+          }),
+      );
+      const tool = createFetchTool({
+        firecrawl: { enabled: false },
+        timeoutSeconds: 1,
+      });
+      const resultPromise = tool?.execute?.("call", {
+        url: "https://example.com/timeout",
+      });
+      const observedResultPromise = resultPromise?.catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(1000);
+
+      const error = await observedResultPromise;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).name).toBe("TimeoutError");
+      expect((error as Error).message).toBe("request timed out");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(resolveWebFetchDefinitionMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps fetch execution alive when progress subscribers throw", async () => {
     vi.useFakeTimers();
     try {
@@ -545,7 +581,7 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details?.warning).toContain("Response body truncated");
   });
 
-  it("keeps DNS pinning for web_fetch by default even when HTTP_PROXY is configured", async () => {
+  it("does not use ambient HTTP_PROXY by default", async () => {
     vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
     const mockFetch = installMockFetch((input: RequestInfo | URL) =>
       Promise.resolve({
@@ -561,14 +597,10 @@ describe("web_fetch extraction fallbacks", () => {
     await tool?.execute?.("call", { url: "https://example.com/proxy" });
 
     const requestInit = firstFetchRequestInit(mockFetch);
-    const dispatcher = requestInit?.dispatcher;
-    if (!dispatcher) {
-      throw new Error("expected SSRF dispatcher");
-    }
-    expect(dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+    expect(requestInit?.dispatcher).toBeUndefined();
   });
 
-  it("uses env proxy dispatch for web_fetch when trusted env proxy is explicitly enabled", async () => {
+  it("does not add env proxy dispatch for web_fetch when trusted env proxy is explicitly enabled", async () => {
     vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
     const mockFetch = installMockFetch((input: RequestInfo | URL) =>
       Promise.resolve({
@@ -587,11 +619,7 @@ describe("web_fetch extraction fallbacks", () => {
     await tool?.execute?.("call", { url: "https://example.com/proxy" });
 
     const requestInit = firstFetchRequestInit(mockFetch);
-    const dispatcher = requestInit?.dispatcher;
-    if (!dispatcher) {
-      throw new Error("expected trusted proxy dispatcher");
-    }
-    expect(dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+    expect(requestInit?.dispatcher).toBeUndefined();
   });
 
   // NOTE: Test for wrapping url/finalUrl/warning fields requires DNS mocking.

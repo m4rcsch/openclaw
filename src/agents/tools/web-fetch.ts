@@ -1,7 +1,7 @@
 /**
  * web_fetch built-in tool.
  *
- * Fetches HTTP(S) content through SSRF guards, provider config, caching, and bounded extraction.
+ * Fetches HTTP(S) content through provider config, caching, and bounded extraction.
  */
 import {
   normalizeLowercaseStringOrEmpty,
@@ -10,12 +10,13 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
+import type { LookupFn } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isRecord } from "../../utils.js";
+import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
 import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
 import { stringEnum } from "../schema/string-enum.js";
@@ -90,26 +91,13 @@ type WebFetchRuntimeModule = Pick<
   typeof import("../../web-fetch/runtime.js"),
   "resolveWebFetchDefinition"
 >;
-type WebGuardedFetchModule = Pick<
-  typeof import("./web-guarded-fetch.js"),
-  "fetchWithWebToolsNetworkGuard"
->;
 
 const webFetchRuntimeLoader = createLazyImportLoader<WebFetchRuntimeModule>(
   () => import("../../web-fetch/runtime.js"),
 );
-const webGuardedFetchLoader = createLazyImportLoader<WebGuardedFetchModule>(
-  () => import("./web-guarded-fetch.js"),
-);
 
 async function loadWebFetchRuntime(): Promise<WebFetchRuntimeModule> {
   return await webFetchRuntimeLoader.load();
-}
-
-async function loadWebGuardedFetch(): Promise<
-  WebGuardedFetchModule["fetchWithWebToolsNetworkGuard"]
-> {
-  return (await webGuardedFetchLoader.load()).fetchWithWebToolsNetworkGuard;
 }
 
 function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
@@ -291,15 +279,18 @@ type WebFetchRuntimeParams = {
   readabilityEnabled: boolean;
   config?: OpenClawConfig;
   useTrustedEnvProxy: boolean;
-  ssrfPolicy?: {
-    allowRfc2544BenchmarkRange?: boolean;
-    allowIpv6UniqueLocalRange?: boolean;
-  };
   providerCacheKey?: string;
-  lookupFn?: LookupFn;
   signal?: AbortSignal;
   resolveProviderFallback: () => Promise<WebFetchProviderFallback>;
 };
+
+type DirectWebFetchResult = {
+  response: Response;
+  finalUrl: string;
+  release: () => Promise<void>;
+};
+
+class WebFetchInvalidUrlError extends Error {}
 
 function normalizeProviderFinalUrl(value: unknown): string | undefined {
   const trimmed = normalizeOptionalString(value);
@@ -330,6 +321,57 @@ function throwIfFetchAborted(signal: AbortSignal | undefined): void {
   // readResponseText may finish after an abort races with body reading. Recheck
   // before wrapping, caching, or returning content from a canceled tool call.
   throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
+}
+
+function parseHttpWebFetchUrl(rawUrl: string): URL {
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(rawUrl);
+  } catch {
+    throw new WebFetchInvalidUrlError("Invalid URL: must be http or https");
+  }
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    throw new WebFetchInvalidUrlError("Invalid URL: must be http or https");
+  }
+  return parsedUrl;
+}
+
+async function directWebFetch(params: {
+  url: string;
+  timeoutSeconds: number;
+  signal?: AbortSignal;
+  headers: HeadersInit;
+}): Promise<DirectWebFetchResult> {
+  const url = parseHttpWebFetchUrl(params.url).toString();
+  const timeout = buildTimeoutAbortSignal({
+    timeoutMs: params.timeoutSeconds * 1000,
+    signal: params.signal,
+    operation: "web_fetch",
+    url: params.url,
+  });
+  let released = false;
+  const release = async () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    timeout.cleanup();
+  };
+
+  try {
+    const response = await fetch(url, {
+      headers: params.headers,
+      signal: timeout.signal,
+    });
+    return {
+      response,
+      finalUrl: response.url || url,
+      release,
+    };
+  } catch (error) {
+    await release();
+    throw error;
+  }
 }
 
 function normalizeProviderWebFetchPayload(params: {
@@ -419,54 +461,29 @@ async function maybeFetchProviderWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
-  const allowRfc2544BenchmarkRange = params.ssrfPolicy?.allowRfc2544BenchmarkRange === true;
-  const allowIpv6UniqueLocalRange = params.ssrfPolicy?.allowIpv6UniqueLocalRange === true;
-  const useTrustedEnvProxy = params.useTrustedEnvProxy;
-  const ssrfPolicy: SsrFPolicy | undefined =
-    allowRfc2544BenchmarkRange || allowIpv6UniqueLocalRange
-      ? {
-          ...(allowRfc2544BenchmarkRange ? { allowRfc2544BenchmarkRange } : {}),
-          ...(allowIpv6UniqueLocalRange ? { allowIpv6UniqueLocalRange } : {}),
-        }
-      : undefined;
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${params.providerCacheKey ? `:provider:${params.providerCacheKey}` : ""}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}${useTrustedEnvProxy ? ":trusted-env-proxy" : ""}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${params.providerCacheKey ? `:provider:${params.providerCacheKey}` : ""}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
     return { ...cached.value, cached: true };
   }
 
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(params.url);
-  } catch {
-    throw new Error("Invalid URL: must be http or https");
-  }
-  if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-    throw new Error("Invalid URL: must be http or https");
-  }
+  parseHttpWebFetchUrl(params.url);
 
   const start = Date.now();
   let res: Response;
   let release: (() => Promise<void>) | null;
   let finalUrl = params.url;
   try {
-    const fetchWithWebToolsNetworkGuard = await loadWebGuardedFetch();
-    const result = await fetchWithWebToolsNetworkGuard({
+    const result = await directWebFetch({
       url: params.url,
-      maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       signal: params.signal,
-      lookupFn: params.lookupFn,
-      useEnvProxy: useTrustedEnvProxy,
-      policy: ssrfPolicy,
-      init: {
-        headers: {
-          Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
-          "User-Agent": params.userAgent,
-          "Accept-Language": "en-US,en;q=0.9",
-        },
+      headers: {
+        Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
+        "User-Agent": params.userAgent,
+        "Accept-Language": "en-US,en;q=0.9",
       },
     });
     res = result.response;
@@ -481,7 +498,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       );
     }
   } catch (error) {
-    if (error instanceof SsrFBlockedError) {
+    if (error instanceof WebFetchInvalidUrlError) {
       throw error;
     }
     if (params.signal?.aborted) {
@@ -738,9 +755,7 @@ export function createWebFetchTool(options?: {
           readabilityEnabled,
           config,
           useTrustedEnvProxy: resolveFetchUseTrustedEnvProxy(executionFetch),
-          ssrfPolicy: executionFetch?.ssrfPolicy,
           ...(providerCacheKey ? { providerCacheKey } : {}),
-          lookupFn: options?.lookupFn,
           signal,
           resolveProviderFallback,
         });
