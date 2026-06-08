@@ -624,6 +624,10 @@
     "target": "发布策略"
   },
   {
+    "source": "Full release validation",
+    "target": "完整发布验证"
+  },
+  {
     "source": "for full details",
     "target": "了解详情"
   },
@@ -942,6 +946,10 @@
   {
     "source": "Matrix QA",
     "target": "Matrix QA"
+  },
+  {
+    "source": "Maturity tests",
+    "target": "成熟度测试"
   },
   {
     "source": "Matrix presentation metadata",
