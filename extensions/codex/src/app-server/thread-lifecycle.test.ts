@@ -217,6 +217,32 @@ describe("Codex app-server native code mode config", () => {
     expect(searchableFingerprint).toBe(directFingerprint);
   });
 
+  it("fingerprints malformed dynamic tool descriptors without crashing", () => {
+    const malformedTool = {
+      get name(): never {
+        throw new Error("tool name getter exploded");
+      },
+      get description(): never {
+        throw new Error("tool description getter exploded");
+      },
+      inputSchema: {
+        type: "object",
+        get properties(): never {
+          throw new Error("schema properties getter exploded");
+        },
+      },
+      get deferLoading(): never {
+        throw new Error("tool defer flag getter exploded");
+      },
+    };
+
+    expect(
+      codexDynamicToolsFingerprint([null, malformedTool] as unknown as Parameters<
+        typeof codexDynamicToolsFingerprint
+      >[0]),
+    ).toBe('[{"inputSchema":{"type":"object"}},null]');
+  });
+
   it("keeps OpenClaw skill catalogs out of developer instructions", () => {
     const params = createAttemptParams({ provider: "openai" });
     params.skillsSnapshot = {

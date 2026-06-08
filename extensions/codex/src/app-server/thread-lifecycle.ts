@@ -1112,14 +1112,13 @@ function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {
     return stabilizeJsonValue(tool);
   }
   const stable: JsonObject = {};
-  for (const [key, child] of Object.entries(tool).toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
+  for (const key of readStableJsonObjectKeys(tool)) {
     // Tool-search presentation can change per turn without changing the
     // durable app-server execution contract for an existing thread.
     if (key === "description" || key === "deferLoading" || key === "namespace") {
       continue;
     }
+    const child = readStableJsonObjectValue(tool, key);
     stable[key] = stabilizeJsonValue(child);
   }
   return stable;
@@ -1133,12 +1132,27 @@ function stabilizeJsonValue(value: JsonValue): JsonValue {
     return value;
   }
   const stable: JsonObject = {};
-  for (const [key, child] of Object.entries(value).toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
+  for (const key of readStableJsonObjectKeys(value)) {
+    const child = readStableJsonObjectValue(value, key);
     stable[key] = stabilizeJsonValue(child);
   }
   return stable;
+}
+
+function readStableJsonObjectKeys(value: JsonObject): string[] {
+  try {
+    return Object.keys(value).toSorted((left, right) => left.localeCompare(right));
+  } catch {
+    return [];
+  }
+}
+
+function readStableJsonObjectValue(value: JsonObject, key: string): JsonValue {
+  try {
+    return value[key];
+  } catch {
+    return undefined;
+  }
 }
 
 const EMPTY_DYNAMIC_TOOLS_FINGERPRINT = JSON.stringify([]);
