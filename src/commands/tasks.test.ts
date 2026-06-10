@@ -4,8 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../config/config.js";
-import { resolveSqliteSessionStoreDatabasePath } from "../config/sessions/store-sqlite.js";
-import { loadSessionStore, saveSessionStore } from "../config/sessions/store.js";
+import {
+  loadSqliteSessionStore,
+  replaceSqliteSessionStore,
+  resolveSqliteSessionStoreDatabasePath,
+} from "../config/sessions/store-sqlite.js";
 import { saveCronStore } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -82,12 +85,14 @@ async function writeTaskSessionStore(
   store: Record<string, Record<string, unknown>>,
 ) {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await saveSessionStore(storePath, store as never, { skipMaintenance: true });
+  replaceSqliteSessionStore(storePath, store as never);
   closeOpenClawAgentDatabasesForTest();
 }
 
 function readTaskSessionStore(storePath: string): Record<string, unknown> {
-  return loadSessionStore(storePath, { skipCache: true }) as Record<string, unknown>;
+  const store = loadSqliteSessionStore(storePath) as Record<string, unknown>;
+  closeOpenClawAgentDatabasesForTest();
+  return store;
 }
 
 const zeroTaskAuditCounts = {
@@ -154,7 +159,7 @@ describe("tasks commands", () => {
     await withTaskCommandStateDir(async () => {
       const now = Date.now();
       vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(now - 40 * 60_000);
+      vi.setSystemTime(now);
       createTaskRecord({
         runtime: "cli",
         ownerKey: "agent:main:main",
@@ -267,7 +272,7 @@ describe("tasks commands", () => {
     await withTaskCommandStateDir(async (state) => {
       const now = Date.now();
       vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(now - 45 * 60_000);
+      vi.setSystemTime(now);
       const childSessionKey = "agent:main:subagent:child-retained";
       const task = createTaskRecord({
         runtime: "subagent",
@@ -316,7 +321,7 @@ describe("tasks commands", () => {
     await withTaskCommandStateDir(async (state) => {
       const now = Date.now();
       vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(now - 45 * 60_000);
+      vi.setSystemTime(now);
       const childSessionKey = "agent:main:cron:done-job:run:old-run";
       const task = createTaskRecord({
         runtime: "subagent",
