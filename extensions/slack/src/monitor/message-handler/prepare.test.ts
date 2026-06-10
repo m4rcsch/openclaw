@@ -32,6 +32,16 @@ import {
 import { clearSlackSubteamMentionCacheForTest } from "./subteam-mentions.js";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
+const fetchWithRuntimeDispatcherMock = vi.hoisted(() => vi.fn());
+const saveRemoteMediaMock = vi.hoisted(() =>
+  vi.fn(async (params: Parameters<typeof import("../media.runtime.js").saveRemoteMedia>[0]) => ({
+    id: "saved-media-id",
+    path: `/tmp/${params.options.filePathHint ?? "slack-media"}`,
+    size: 10,
+    contentType: params.options.fallbackContentType,
+    fileName: params.options.filePathHint,
+  })),
+);
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>();
@@ -40,6 +50,11 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => {
     enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
   };
 });
+
+vi.mock("../media.runtime.js", () => ({
+  fetchWithRuntimeDispatcher: fetchWithRuntimeDispatcherMock,
+  saveRemoteMedia: saveRemoteMediaMock,
+}));
 
 describe("slack prepareSlackMessage inbound contract", () => {
   const storeFixture = createSlackSessionStoreFixture("openclaw-slack-thread-");
@@ -54,6 +69,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
     clearSlackAllowFromCacheForTest();
     clearSlackSubteamMentionCacheForTest();
     enqueueSystemEventMock.mockClear();
+    fetchWithRuntimeDispatcherMock.mockClear();
+    saveRemoteMediaMock.mockClear();
   });
 
   afterAll(() => {
@@ -1109,106 +1126,96 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
   });
 
   it("records skipped no-mention room images as pending history media", async () => {
-    const originalFetch = globalThis.fetch;
-    const mockFetch = vi.fn(async () => {
-      return new Response(Buffer.from("image data"), {
-        status: 200,
-        headers: { "content-type": "image/png" },
-      });
+    saveRemoteMediaMock.mockResolvedValue({
+      id: "saved-media-id",
+      path: "/tmp/diagram.png",
+      size: 10,
+      contentType: "image/png",
+      fileName: "diagram.png",
     });
-    globalThis.fetch = mockFetch as typeof fetch;
 
-    try {
-      const slackCtx = createInboundSlackCtx({
-        cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
-        defaultRequireMention: true,
-      });
-      slackCtx.historyLimit = 5;
-      slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    const slackCtx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      defaultRequireMention: true,
+    });
+    slackCtx.historyLimit = 5;
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
 
-      const prepared = await prepareMessageWith(
-        slackCtx,
-        createSlackAccount(),
-        createSlackMessage({
-          channel: "C123",
-          channel_type: "channel",
-          text: "",
-          ts: "500.000",
-          files: [
-            {
-              id: "F1",
-              name: "diagram.png",
-              mimetype: "image/png",
-              url_private: "https://files.slack.com/diagram.png",
-            },
-          ],
-        }),
-      );
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount(),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "",
+        ts: "500.000",
+        files: [
+          {
+            id: "F1",
+            name: "diagram.png",
+            mimetype: "image/png",
+            url_private: "https://files.slack.com/diagram.png",
+          },
+        ],
+      }),
+    );
 
-      expect(prepared).toBeNull();
-      const entries = Array.from(slackCtx.channelHistories.values()).flat();
-      expect(entries).toHaveLength(1);
-      expect(entries[0]?.body).toBe("[Slack file: diagram.png (fileId: F1)]");
-      expect(entries[0]?.media).toHaveLength(1);
-      expect(entries[0]?.media?.[0]).toMatchObject({
-        contentType: "image/png",
-        kind: "image",
-        messageId: "500.000",
-      });
-      expect(entries[0]?.media?.[0]?.path).toEqual(expect.any(String));
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    expect(prepared).toBeNull();
+    const entries = Array.from(slackCtx.channelHistories.values()).flat();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.body).toBe("[Slack file: diagram.png (fileId: F1)]");
+    expect(entries[0]?.media).toHaveLength(1);
+    expect(entries[0]?.media?.[0]).toMatchObject({
+      contentType: "image/png",
+      kind: "image",
+      messageId: "500.000",
+    });
+    expect(entries[0]?.media?.[0]?.path).toEqual(expect.any(String));
   });
 
   it("records skipped no-mention shared images as pending history media", async () => {
-    const originalFetch = globalThis.fetch;
-    const mockFetch = vi.fn(async () => {
-      return new Response(Buffer.from("shared image data"), {
-        status: 200,
-        headers: { "content-type": "image/png" },
-      });
+    saveRemoteMediaMock.mockResolvedValue({
+      id: "saved-media-id",
+      path: "/tmp/shared.png",
+      size: 17,
+      contentType: "image/png",
+      fileName: "shared.png",
     });
-    globalThis.fetch = mockFetch as typeof fetch;
 
-    try {
-      const slackCtx = createInboundSlackCtx({
-        cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
-        defaultRequireMention: true,
-      });
-      slackCtx.historyLimit = 5;
-      slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    const slackCtx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      defaultRequireMention: true,
+    });
+    slackCtx.historyLimit = 5;
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
 
-      const prepared = await prepareMessageWith(
-        slackCtx,
-        createSlackAccount(),
-        createSlackMessage({
-          channel: "C123",
-          channel_type: "channel",
-          text: "",
-          ts: "501.000",
-          attachments: [
-            {
-              is_share: true,
-              image_url: "https://files.slack.com/shared.png",
-            },
-          ],
-        }),
-      );
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount(),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "",
+        ts: "501.000",
+        attachments: [
+          {
+            is_share: true,
+            image_url: "https://files.slack.com/shared.png",
+          },
+        ],
+      }),
+    );
 
-      expect(prepared).toBeNull();
-      const entries = Array.from(slackCtx.channelHistories.values()).flat();
-      expect(entries).toHaveLength(1);
-      expect(entries[0]?.body).toBe("[Slack media attachment]");
-      expect(entries[0]?.media).toHaveLength(1);
-      expect(entries[0]?.media?.[0]).toMatchObject({
-        contentType: "image/png",
-        kind: "image",
-        messageId: "501.000",
-      });
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    expect(prepared).toBeNull();
+    const entries = Array.from(slackCtx.channelHistories.values()).flat();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.body).toBe("[Slack media attachment]");
+    expect(entries[0]?.media).toHaveLength(1);
+    expect(entries[0]?.media?.[0]).toMatchObject({
+      contentType: "image/png",
+      kind: "image",
+      messageId: "501.000",
+    });
   });
 
   it("does not record inherited thread-starter files as skipped reply history media", async () => {
