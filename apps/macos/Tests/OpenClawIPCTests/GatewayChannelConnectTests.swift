@@ -110,13 +110,13 @@ struct GatewayChannelConnectTests {
             })
     }
 
-    private func withTemporaryStateDir<T>(_ operation: () async throws -> T) async throws -> T {
+    private func withTemporaryStateDir(_ operation: () async throws -> Void) async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        return try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
             try await operation()
         }
     }
