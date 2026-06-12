@@ -97,8 +97,12 @@ struct CronModelsTests {
         let json = """
         {"kind":"wat","at":"2026-02-03T18:00:00Z"}
         """
-        #expect(throws: DecodingError.self) {
+        do {
             _ = try JSONDecoder().decode(CronSchedule.self, from: Data(json.utf8))
+            #expect(Bool(false))
+        } catch is DecodingError {
+        } catch {
+            #expect(Bool(false))
         }
     }
 
@@ -106,8 +110,12 @@ struct CronModelsTests {
         let json = """
         {"kind":"wat","text":"hello"}
         """
-        #expect(throws: DecodingError.self) {
+        do {
             _ = try JSONDecoder().decode(CronPayload.self, from: Data(json.utf8))
+            #expect(Bool(false))
+        } catch is DecodingError {
+        } catch {
+            #expect(Bool(false))
         }
     }
 
