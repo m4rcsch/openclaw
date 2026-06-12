@@ -110,6 +110,30 @@ struct GatewayChannelConnectTests {
             })
     }
 
+    private static func connectWithTestTimeout(_ channel: GatewayChannelActor) async throws {
+        try await AsyncTimeout.withTimeout(
+            seconds: 5,
+            onTimeout: {
+                NSError(
+                    domain: "GatewayChannelConnectTests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "test gateway connect timed out"])
+            },
+            operation: { try await channel.connect() })
+    }
+
+    private static func shutdownWithTestTimeout(_ channel: GatewayChannelActor) async throws {
+        try await AsyncTimeout.withTimeout(
+            seconds: 5,
+            onTimeout: {
+                NSError(
+                    domain: "GatewayChannelConnectTests",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "test gateway shutdown timed out"])
+            },
+            operation: { await channel.shutdown() })
+    }
+
     private func withTemporaryStateDir(_ operation: () async throws -> Void) async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -153,7 +177,7 @@ struct GatewayChannelConnectTests {
         _ = try await t2.value
 
         #expect(session.snapshotMakeCount() == 1)
-        await channel.shutdown()
+        try await Self.shutdownWithTestTimeout(channel)
     }
 
     @Test func `connect advertises compatible protocol range`() async throws {
@@ -182,16 +206,16 @@ struct GatewayChannelConnectTests {
                 includeDeviceIdentity: false))
 
         do {
-            try await channel.connect()
+            try await Self.connectWithTestTimeout(channel)
 
             let params = try #require(recorder.snapshot())
             #expect(params["minProtocol"] as? Int == GATEWAY_MIN_PROTOCOL_VERSION)
             #expect(params["maxProtocol"] as? Int == GATEWAY_PROTOCOL_VERSION)
         } catch {
-            await channel.shutdown()
+            try? await Self.shutdownWithTestTimeout(channel)
             throw error
         }
-        await channel.shutdown()
+        try await Self.shutdownWithTestTimeout(channel)
     }
 
     @Test func `concurrent connect shares failure`() async throws {
@@ -214,7 +238,7 @@ struct GatewayChannelConnectTests {
             if case .failure = r2 { true } else { false }
         }())
         #expect(session.snapshotMakeCount() == 1)
-        await channel.shutdown()
+        try await Self.shutdownWithTestTimeout(channel)
     }
 
     @Test func `default operator connect scopes preserve pairing and admin`() async throws {
@@ -233,7 +257,7 @@ struct GatewayChannelConnectTests {
                 token: nil,
                 session: WebSocketSessionBox(session: session))
 
-            try await channel.connect()
+            try await Self.connectWithTestTimeout(channel)
 
             #expect(capture.snapshot() == [
                 "operator.admin",
@@ -242,7 +266,7 @@ struct GatewayChannelConnectTests {
                 "operator.approvals",
                 "operator.pairing",
             ])
-            await channel.shutdown()
+            try await Self.shutdownWithTestTimeout(channel)
         }
     }
 
@@ -262,14 +286,14 @@ struct GatewayChannelConnectTests {
             bootstrapToken: "setup-bootstrap-token",
             session: WebSocketSessionBox(session: session))
 
-        try await channel.connect()
+        try await Self.connectWithTestTimeout(channel)
 
         #expect(capture.snapshot() == [
             "operator.approvals",
             "operator.read",
             "operator.write",
         ])
-        await channel.shutdown()
+        try await Self.shutdownWithTestTimeout(channel)
     }
 
     @Test func `stored device token connect scopes reuse cached scopes`() async throws {
@@ -294,10 +318,10 @@ struct GatewayChannelConnectTests {
                 token: nil,
                 session: WebSocketSessionBox(session: session))
 
-            try await channel.connect()
+            try await Self.connectWithTestTimeout(channel)
 
             #expect(capture.snapshot() == storedEntry.scopes)
-            await channel.shutdown()
+            try await Self.shutdownWithTestTimeout(channel)
         }
     }
 
@@ -334,10 +358,10 @@ struct GatewayChannelConnectTests {
                     clientMode: "ui",
                     clientDisplayName: "OpenClaw macOS Debug CLI"))
 
-            try await channel.connect()
+            try await Self.connectWithTestTimeout(channel)
 
             #expect(capture.snapshot() == requestedScopes)
-            await channel.shutdown()
+            try await Self.shutdownWithTestTimeout(channel)
         }
     }
 
@@ -353,7 +377,7 @@ struct GatewayChannelConnectTests {
             session: WebSocketSessionBox(session: session))
 
         do {
-            try await channel.connect()
+            try await Self.connectWithTestTimeout(channel)
             Issue.record("expected GatewayConnectAuthError")
         } catch let error as GatewayConnectAuthError {
             #expect(error.detail == .authTokenMissing)
@@ -362,11 +386,11 @@ struct GatewayChannelConnectTests {
             #expect(error.recommendedNextStep == .updateAuthConfiguration)
             #expect(error.recommendedNextStepCode == GatewayConnectRecoveryNextStep.updateAuthConfiguration.rawValue)
         } catch {
-            await channel.shutdown()
+            try? await Self.shutdownWithTestTimeout(channel)
             Issue.record("unexpected error: \(error)")
             return
         }
-        await channel.shutdown()
+        try await Self.shutdownWithTestTimeout(channel)
     }
 
     @Test func `connect maps user cancelled authentication with cached TLS failure`() async throws {
@@ -384,15 +408,15 @@ struct GatewayChannelConnectTests {
             session: WebSocketSessionBox(session: session))
 
         do {
-            try await channel.connect()
+            try await Self.connectWithTestTimeout(channel)
             Issue.record("expected GatewayTLSValidationError")
         } catch let error as GatewayTLSValidationError {
             #expect(error.failure == failure)
         } catch {
-            await channel.shutdown()
+            try? await Self.shutdownWithTestTimeout(channel)
             Issue.record("unexpected error: \(error)")
             return
         }
-        await channel.shutdown()
+        try await Self.shutdownWithTestTimeout(channel)
     }
 }
