@@ -146,7 +146,7 @@ export function renderShortcutLegend(props: ShortcutLegendProps) {
           <h2 class="shortcut-legend__title">Keyboard Shortcuts</h2>
           <button
             class="btn btn--icon shortcut-legend__close"
-            type="button"
+            type="button" autofocus
             aria-label="Close keyboard shortcuts"
             @click=${() => props.onClose()}
           >
