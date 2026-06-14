@@ -223,8 +223,6 @@ const storedBindingSchema = z.discriminatedUnion("state", [
   }),
 ]);
 
-type BindingLease = z.infer<typeof bindingLeaseSchema>;
-
 // Session-key rows survive transcript/session-id rotation. The stored physical
 // id fences delayed lifecycle cleanup so an old generation cannot clear its successor.
 export type StoredCodexAppServerBinding = z.infer<typeof storedBindingSchema>;
