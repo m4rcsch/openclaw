@@ -10,6 +10,7 @@ import {
   type FeishuBotAddedEvent,
 } from "./bot.js";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
+import { FEISHU_CARD_ACTION_SIBLING_PAYLOAD_KEYS } from "./card-interaction.js";
 import { createEventDispatcher } from "./client.js";
 import { isRecord, readString } from "./comment-shared.js";
 import {
@@ -206,6 +207,17 @@ function readFeishuIdentityField(
   return firstString(value[field]);
 }
 
+function copyFeishuCardActionSiblingPayloadFields(
+  target: FeishuCardActionEvent["action"],
+  source: Record<string, unknown>,
+): void {
+  for (const key of FEISHU_CARD_ACTION_SIBLING_PAYLOAD_KEYS) {
+    if (Object.hasOwn(source, key)) {
+      target[key] = source[key];
+    }
+  }
+}
+
 function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEvent | null {
   if (!isRecord(value)) {
     return null;
@@ -243,6 +255,11 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
   if (!token || !openId || !tag || !isRecord(actionValue)) {
     return null;
   }
+  const parsedAction: FeishuCardActionEvent["action"] = {
+    value: actionValue,
+    tag,
+  };
+  copyFeishuCardActionSiblingPayloadFields(parsedAction, action);
   return {
     operator: {
       open_id: openId,
@@ -250,10 +267,7 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
       ...(unionId ? { union_id: unionId } : {}),
     },
     token,
-    action: {
-      value: actionValue,
-      tag,
-    },
+    action: parsedAction,
     ...(openMessageId ? { open_message_id: openMessageId } : {}),
     context: {
       ...(openMessageId ? { open_message_id: openMessageId } : {}),

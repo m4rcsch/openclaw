@@ -8,6 +8,25 @@ type FeishuCardInteractionReason = "malformed" | "stale" | "wrong_user" | "wrong
 
 type FeishuCardInteractionMetadata = Record<string, string | number | boolean | null | undefined>;
 
+export const FEISHU_CARD_ACTION_SIBLING_PAYLOAD_KEYS = [
+  "option",
+  "options",
+  "form_value",
+  "input_value",
+  "name",
+] as const;
+const FEISHU_CARD_ACTION_DATA_PAYLOAD_KEYS = [
+  "option",
+  "options",
+  "form_value",
+  "input_value",
+] as const;
+export type FeishuCardActionSiblingPayloadKey =
+  (typeof FEISHU_CARD_ACTION_SIBLING_PAYLOAD_KEYS)[number];
+export type FeishuCardActionSiblingPayload = Partial<
+  Record<FeishuCardActionSiblingPayloadKey, unknown>
+>;
+
 export type FeishuCardInteractionEnvelope = {
   oc: typeof FEISHU_CARD_INTERACTION_VERSION;
   k: FeishuCardInteractionKind;
@@ -29,7 +48,7 @@ type FeishuCardActionEventLike = {
   };
   action: {
     value: unknown;
-  };
+  } & FeishuCardActionSiblingPayload;
   context: {
     chat_id?: string;
   };
@@ -63,6 +82,26 @@ function isMetadataValue(value: unknown): value is string | number | boolean | n
   );
 }
 
+function hasOwn(value: object, key: string): boolean {
+  return Object.hasOwn(value, key);
+}
+
+function buildFeishuCardActionPayloadValue(action: FeishuCardActionEventLike["action"]): unknown {
+  const actionValue = action.value;
+  if (!isRecord(actionValue)) {
+    return actionValue;
+  }
+  let payload: Record<string, unknown> | undefined;
+  for (const key of FEISHU_CARD_ACTION_SIBLING_PAYLOAD_KEYS) {
+    if (!hasOwn(action, key)) {
+      continue;
+    }
+    payload ??= { ...actionValue };
+    payload[key] = action[key];
+  }
+  return payload ?? actionValue;
+}
+
 export function createFeishuCardInteractionEnvelope(
   envelope: Omit<FeishuCardInteractionEnvelope, "oc">,
 ): FeishuCardInteractionEnvelope {
@@ -75,13 +114,16 @@ export function createFeishuCardInteractionEnvelope(
 export function buildFeishuCardActionTextFallback(event: FeishuCardActionEventLike): string {
   const actionValue = event.action.value;
   if (isRecord(actionValue)) {
-    if (typeof actionValue.text === "string") {
+    const hasDataPayload = FEISHU_CARD_ACTION_DATA_PAYLOAD_KEYS.some((key) =>
+      hasOwn(event.action, key),
+    );
+    if (!hasDataPayload && typeof actionValue.text === "string") {
       return actionValue.text;
     }
-    if (typeof actionValue.command === "string") {
+    if (!hasDataPayload && typeof actionValue.command === "string") {
       return actionValue.command;
     }
-    return JSON.stringify(actionValue);
+    return JSON.stringify(buildFeishuCardActionPayloadValue(event.action));
   }
   return String(actionValue);
 }

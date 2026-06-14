@@ -7,7 +7,11 @@ import {
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
-import { decodeFeishuCardAction, buildFeishuCardActionTextFallback } from "./card-interaction.js";
+import {
+  decodeFeishuCardAction,
+  buildFeishuCardActionTextFallback,
+  type FeishuCardActionSiblingPayload,
+} from "./card-interaction.js";
 import {
   createApprovalCard,
   FEISHU_APPROVAL_CANCEL_ACTION,
@@ -27,7 +31,7 @@ export type FeishuCardActionEvent = {
   action: {
     value: Record<string, unknown>;
     tag: string;
-  };
+  } & FeishuCardActionSiblingPayload;
   open_message_id?: string;
   context: {
     open_message_id?: string;

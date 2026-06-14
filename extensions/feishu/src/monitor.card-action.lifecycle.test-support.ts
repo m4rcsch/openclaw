@@ -331,6 +331,52 @@ describe("Feishu card-action lifecycle", () => {
     expect(latestFinalizedContext().MessageSid).toBe("card-action-tok-card-sdk-flat");
   });
 
+  it("preserves card action sibling payload fields from raw callbacks", async () => {
+    const onCardAction = await setupLifecycleMonitor();
+
+    await onCardAction({
+      open_id: "ou_user1",
+      user_id: "user_1",
+      open_message_id: "om_sdk_card_payload",
+      token: "tok-card-sdk-payload",
+      action: {
+        tag: "select_static",
+        value: {
+          field: "expense",
+        },
+        option: "approved",
+        options: [],
+        form_value: {},
+        input_value: "Dinner with customer",
+        name: "expense_reason",
+      },
+    });
+
+    const expectedPayload = JSON.stringify({
+      field: "expense",
+      option: "approved",
+      options: [],
+      form_value: {},
+      input_value: "Dinner with customer",
+      name: "expense_reason",
+    });
+
+    expect(lastRuntime?.error).not.toHaveBeenCalled();
+    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    const finalized = latestFinalizedContext() as {
+      BodyForAgent?: string;
+      BodyForCommands?: string;
+      CommandBody?: string;
+      RawBody?: string;
+    };
+    expect(finalized.BodyForAgent).toBe(
+      `[message_id: card-action-tok-card-sdk-payload]\nou_user1: ${expectedPayload}`,
+    );
+    expect(finalized.BodyForCommands).toBe(expectedPayload);
+    expect(finalized.CommandBody).toBe(expectedPayload);
+    expect(finalized.RawBody).toBe(expectedPayload);
+  });
+
   it("plain-sends card action replies when Feishu provides no real message id", async () => {
     const onCardAction = await setupLifecycleMonitor();
 

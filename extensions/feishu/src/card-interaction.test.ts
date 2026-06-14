@@ -53,6 +53,38 @@ describe("feishu card interaction decoder", () => {
         action: { value: { command: "/new" } },
       }),
     ).toBe("/new");
+    expect(
+      buildFeishuCardActionTextFallback({
+        operator: { open_id: "u123" },
+        context: { chat_id: "chat1" },
+        action: { value: { command: "/named" }, name: "named_button" },
+      }),
+    ).toBe("/named");
+  });
+
+  it("preserves legacy card action sibling payload fields", () => {
+    const result = buildFeishuCardActionTextFallback({
+      operator: { open_id: "u123" },
+      context: { chat_id: "chat1" },
+      action: {
+        value: { command: "/submit", field: "expense" },
+        option: "approved",
+        options: [],
+        form_value: {},
+        input_value: "Dinner with customer",
+        name: "expense_reason",
+      },
+    });
+
+    expect(JSON.parse(result)).toEqual({
+      command: "/submit",
+      field: "expense",
+      option: "approved",
+      options: [],
+      form_value: {},
+      input_value: "Dinner with customer",
+      name: "expense_reason",
+    });
   });
 
   it("rejects malformed structured payloads", () => {
