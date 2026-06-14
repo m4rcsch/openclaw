@@ -65,6 +65,7 @@ type ChildState = {
   completionDeliveryAttempt: number;
   completionDeliveryTimer?: ReturnType<typeof setTimeout>;
   deliveringCompletion: boolean;
+  deliveryOwnerKey?: string;
 };
 
 type RecoveredCompletion = CodexNativeSubagentCompletion & {
@@ -117,6 +118,7 @@ const defaultRuntime: NativeSubagentMonitorRuntime = {
 };
 
 const monitors = new WeakMap<CodexAppServerClient, CodexNativeSubagentMonitor>();
+const completionDeliveryOwners = new Map<string, ChildState>();
 
 export type CodexNativeSubagentMonitorRegistration = {
   unregister: () => void;
@@ -545,6 +547,10 @@ export class CodexNativeSubagentMonitor {
     if (childState.terminal) {
       return;
     }
+    if (!this.claimCompletionDelivery(state, childState)) {
+      this.unregisterChild(childState);
+      return;
+    }
     childState.terminal = true;
     this.clearRecoveryTimers(childState);
     state.mirror?.markAuthoritativeCompletion(completion.childThreadId);
@@ -692,7 +698,9 @@ export class CodexNativeSubagentMonitor {
       this.childStates.set(childThreadId, childState);
     }
     this.registerAgentPath(childState, childThreadId);
-    this.parentStates.get(parentThreadId)?.mirror?.markAuthoritativeCompletionExpected(childThreadId);
+    this.parentStates
+      .get(parentThreadId)
+      ?.mirror?.markAuthoritativeCompletionExpected(childThreadId);
     const agentPath = normalizeOptionalString(options.agentPath);
     if (agentPath) {
       this.registerAgentPath(childState, agentPath);
@@ -722,6 +730,11 @@ export class CodexNativeSubagentMonitor {
     if (childState.completionDeliveryTimer) {
       clearTimeout(childState.completionDeliveryTimer);
     }
+    const deliveryOwnerKey = childState.deliveryOwnerKey;
+    if (deliveryOwnerKey && completionDeliveryOwners.get(deliveryOwnerKey) === childState) {
+      completionDeliveryOwners.delete(deliveryOwnerKey);
+    }
+    childState.deliveryOwnerKey = undefined;
     for (const key of childState.agentPathKeys) {
       if (this.childThreadIdsByAgentPath.get(key) === childState.childThreadId) {
         this.childThreadIdsByAgentPath.delete(key);
@@ -743,6 +756,23 @@ export class CodexNativeSubagentMonitor {
     }
     this.releaseClientRetention?.();
     this.releaseClientRetention = undefined;
+  }
+
+  private claimCompletionDelivery(state: ParentState, childState: ChildState): boolean {
+    const requesterSessionKey = state.requesterSessionKey?.trim();
+    if (!requesterSessionKey) {
+      return true;
+    }
+    const key = `${requesterSessionKey}\0${childState.childThreadId}`;
+    const owner = completionDeliveryOwners.get(key);
+    if (owner && owner !== childState) {
+      return false;
+    }
+    // Delivery no longer needs the app-server client. Keep one process owner
+    // across client replacement so fallback steering cannot inject twice.
+    completionDeliveryOwners.set(key, childState);
+    childState.deliveryOwnerKey = key;
+    return true;
   }
 
   private pruneParentIfUnused(state: ParentState): void {

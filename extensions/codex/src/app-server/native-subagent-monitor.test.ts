@@ -841,6 +841,50 @@ describe("CodexNativeSubagentMonitor", () => {
     }
   });
 
+  it("keeps one terminal delivery owner across physical client replacement", async () => {
+    vi.useFakeTimers();
+    try {
+      const firstClient = createClient();
+      const replacementClient = createClient();
+      replacementClient.setThreadRead("child-thread", threadRead({ result: "child final result" }));
+      const runtime = createRuntime();
+      runtime.deliverAgentHarnessTaskCompletion
+        .mockResolvedValueOnce({ delivered: false, path: "direct", error: "pending" })
+        .mockResolvedValueOnce({ delivered: true, path: "direct" });
+      const firstMonitor = new CodexNativeSubagentMonitor(firstClient as never, runtime, {
+        completionDeliveryRetryDelaysMs: [10],
+      });
+      registerParent(firstMonitor);
+      await notifyChildStarted(firstClient);
+      await firstClient.notify(nativeCompletionNotification());
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+
+      runtime.listTaskRecords.mockReturnValue([
+        taskRecord({
+          childThreadId: "child-thread",
+          status: "succeeded",
+          deliveryStatus: "pending",
+          endedAt: Date.now(),
+        }),
+      ]);
+      firstClient.close();
+      const replacementMonitor = new CodexNativeSubagentMonitor(
+        replacementClient as never,
+        runtime,
+      );
+      registerParent(replacementMonitor);
+      await vi.waitFor(() => expect(replacementClient.request).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(2);
+      replacementClient.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("bounds permanently non-durable completion retries", async () => {
     vi.useFakeTimers();
     try {
