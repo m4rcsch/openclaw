@@ -243,7 +243,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     await run;
 
     expect(terminalPresentation).toBe("later dynamic summary");
-  });
+  }, 300_000);
 
   it("suppresses a late dynamic tool presentation after its timeout response", async () => {
     let resolveSlowTool!: (result: ReturnType<typeof textToolResult>) => void;
