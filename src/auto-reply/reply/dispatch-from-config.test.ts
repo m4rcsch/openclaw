@@ -1577,6 +1577,7 @@ describe("dispatchReplyFromConfig", () => {
       routeThreadId: "500.000",
     });
     activeOperation.setPhase("running");
+    const abortController = new AbortController();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
 
@@ -1593,6 +1594,7 @@ describe("dispatchReplyFromConfig", () => {
       }),
       cfg: emptyConfig,
       dispatcher,
+      replyOptions: { abortSignal: abortController.signal },
       replyResolver,
     });
 
@@ -1607,6 +1609,7 @@ describe("dispatchReplyFromConfig", () => {
       expect(result).toBe("blocked");
       expect(replyResolver).not.toHaveBeenCalled();
     } finally {
+      abortController.abort();
       activeOperation.complete();
       await resultPromise;
     }
