@@ -2648,6 +2648,7 @@ output="$(cat "$sampler_log")"
     expect(helper).toContain(
       '-v "$ROOT_DIR/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"',
     );
+    expect(helper).toContain('-v "$ROOT_DIR/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"');
   });
 
   it("preserves pnpm lookup paths for scheduled Docker child lanes", () => {
