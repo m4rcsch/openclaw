@@ -1678,6 +1678,8 @@ describe("dispatchReplyFromConfig", () => {
 
   it("recovers exec-event route from persisted session delivery context", () => {
     const entry = {
+      sessionId: "session-main",
+      updatedAt: 0,
       deliveryContext: {
         channel: "telegram",
         to: "telegram:999",
@@ -1823,6 +1825,8 @@ describe("dispatchReplyFromConfig", () => {
 
   it("honors sendPolicy deny for recovered exec-event delivery channel", () => {
     const entry = {
+      sessionId: "session-main",
+      updatedAt: 0,
       deliveryContext: {
         channel: "telegram",
         to: "telegram:999",
