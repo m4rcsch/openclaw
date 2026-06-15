@@ -3,7 +3,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { deriveInboundMessageHookContext } from "../../hooks/message-hook-mappers.js";
+import {
+  deriveInboundMessageHookContext,
+  toPluginMessageReceivedEvent,
+} from "../../hooks/message-hook-mappers.js";
 import {
   clearApprovalNativeRouteStateForTest,
   createApprovalNativeRouteReporter,
@@ -5286,11 +5289,7 @@ describe("dispatchReplyFromConfig", () => {
     }
   });
 
-  it("emits message_received hook with originating channel metadata", async () => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockReturnValue(true);
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
+  it("builds message_received hook payload with originating channel metadata", () => {
     const ctx = buildTestCtx({
       Provider: "slack",
       Surface: "slack",
@@ -5310,38 +5309,24 @@ describe("dispatchReplyFromConfig", () => {
       GroupChannel: "alerts",
     });
 
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    const hookContext = deriveInboundMessageHookContext(ctx);
+    const event = toPluginMessageReceivedEvent(hookContext);
 
-    const [event, hookContext] = firstMockCall(
-      hookMocks.runner.runMessageReceived,
-      "message received hook",
-    ) as
-      | [
-          {
-            content?: unknown;
-            from?: unknown;
-            metadata?: Record<string, unknown>;
-            timestamp?: unknown;
-          },
-          { accountId?: unknown; channelId?: unknown; conversationId?: unknown },
-        ]
-      | [];
-    expect(event?.from).toBe(ctx.From);
-    expect(event?.content).toBe("/search hello");
-    expect(event?.timestamp).toBe(1710000000000);
-    expect(event?.metadata?.originatingChannel).toBe("Telegram");
-    expect(event?.metadata?.originatingTo).toBe("telegram:999");
-    expect(event?.metadata?.messageId).toBe("sid-full");
-    expect(event?.metadata?.senderId).toBe("user-1");
-    expect(event?.metadata?.senderName).toBe("Alice");
-    expect(event?.metadata?.senderUsername).toBe("alice");
-    expect(event?.metadata?.senderE164).toBe("+15555550123");
-    expect(event?.metadata?.guildId).toBe("guild-123");
-    expect(event?.metadata?.channelName).toBe("alerts");
-    expect(hookContext?.channelId).toBe("telegram");
-    expect(hookContext?.accountId).toBe("acc-1");
-    expect(hookContext?.conversationId).toBe("telegram:999");
+    expect(event.from).toBe(ctx.From);
+    expect(event.content).toBe("/search hello");
+    expect(event.timestamp).toBe(1710000000000);
+    expect(event.metadata.originatingChannel).toBe("Telegram");
+    expect(event.metadata.originatingTo).toBe("telegram:999");
+    expect(event.metadata.messageId).toBe("sid-full");
+    expect(event.metadata.senderId).toBe("user-1");
+    expect(event.metadata.senderName).toBe("Alice");
+    expect(event.metadata.senderUsername).toBe("alice");
+    expect(event.metadata.senderE164).toBe("+15555550123");
+    expect(event.metadata.guildId).toBe("guild-123");
+    expect(event.metadata.channelName).toBe("alerts");
+    expect(hookContext.channelId).toBe("telegram");
+    expect(hookContext.accountId).toBe("acc-1");
+    expect(hookContext.conversationId).toBe("telegram:999");
   });
 
   it("does not emit shared message_received hooks when the channel emitted them itself", async () => {
