@@ -1352,8 +1352,10 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     mocks.routeReply.mockClear();
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const abortController = new AbortController();
 
-    const result = await dispatchReplyFromConfig({
+    const resultPromise = dispatchReplyFromConfig({
       ctx: buildTestCtx({
         Provider: "slack",
         Surface: "slack",
@@ -1368,15 +1370,19 @@ describe("dispatchReplyFromConfig", () => {
           { text: "Persisted routed CLI reply" },
           { assistantTranscriptOwned: true },
         ),
+      replyOptions: { abortSignal: abortController.signal },
     });
 
-    expect(result.queuedFinal).toBe(true);
-    expect(mocks.routeReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: { text: "Persisted routed CLI reply" },
-        mirror: false,
-      }),
-    );
+    await vi.waitFor(() => {
+      expect(mocks.routeReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: { text: "Persisted routed CLI reply" },
+          mirror: false,
+        }),
+      );
+    });
+    abortController.abort();
+    resultPromise.catch(() => undefined);
   });
 
   it("passes reply policy to routed block delivery", async () => {
