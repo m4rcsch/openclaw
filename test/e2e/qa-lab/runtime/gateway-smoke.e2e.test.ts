@@ -2,10 +2,161 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { runGatewaySmoke } from "../../../../scripts/dev/gateway-smoke.js";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../../../../packages/gateway-protocol/src/version.js";
+import {
+  createGatewayWsClient,
+  resolveGatewayUrl,
+} from "../../../../scripts/lib/gateway-ws-client.ts";
 
 let server: Server | undefined;
 let wss: WebSocketServer | undefined;
+
+type GatewaySmokeClient = ReturnType<typeof createGatewayWsClient>;
+
+type GatewaySmokeDeps = {
+  createClient?: typeof createGatewayWsClient;
+  stderr?: (message: string) => void;
+  stdout?: (message: string) => void;
+};
+
+function writeStdoutLine(message: string): void {
+  process.stdout.write(`${message}\n`);
+}
+
+function writeStderrLine(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasHealthSummaryPayload(response: unknown): boolean {
+  if (!isRecord(response) || !isRecord(response.payload)) {
+    return false;
+  }
+  const { payload } = response;
+  return (
+    payload.ok === true &&
+    typeof payload.ts === "number" &&
+    typeof payload.durationMs === "number" &&
+    typeof payload.defaultAgentId === "string" &&
+    payload.defaultAgentId.trim() !== "" &&
+    Array.isArray(payload.agents) &&
+    isRecord(payload.channels) &&
+    Array.isArray(payload.channelOrder) &&
+    isRecord(payload.sessions)
+  );
+}
+
+function hasStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function connectHelloScopes(response: unknown): string[] | null {
+  if (!isRecord(response) || !isRecord(response.payload)) {
+    return null;
+  }
+  const { payload } = response;
+  if (
+    payload.type !== "hello-ok" ||
+    typeof payload.protocol !== "number" ||
+    !isRecord(payload.features) ||
+    !hasStringArray(payload.features.methods) ||
+    !payload.features.methods.includes("health") ||
+    !isRecord(payload.auth) ||
+    payload.auth.role !== "operator" ||
+    !hasStringArray(payload.auth.scopes)
+  ) {
+    return null;
+  }
+  return payload.auth.scopes;
+}
+
+function hasConnectHelloPayload(response: unknown): boolean {
+  return connectHelloScopes(response) !== null;
+}
+
+function hasUnpairedOperatorScopes(response: unknown): boolean {
+  const scopes = connectHelloScopes(response);
+  if (!scopes) {
+    return false;
+  }
+  return scopes.length > 0;
+}
+
+async function runGatewaySmoke(
+  input: { token: string; urlRaw: string },
+  deps: GatewaySmokeDeps = {},
+): Promise<number> {
+  const url = resolveGatewayUrl(input.urlRaw);
+  const createClient = deps.createClient ?? createGatewayWsClient;
+  const stderr = deps.stderr ?? writeStderrLine;
+  const stdout = deps.stdout ?? writeStdoutLine;
+  const client: GatewaySmokeClient = createClient({
+    url: url.toString(),
+    onEvent: (evt) => {
+      // Ignore noisy connect handshakes.
+      void evt;
+    },
+  });
+  const { request, waitOpen, close } = client;
+
+  try {
+    await waitOpen();
+
+    // Match iOS "operator" session defaults: token auth, no device identity.
+    const connectRes = await request("connect", {
+      minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "openclaw-ios",
+        displayName: "openclaw gateway smoke test",
+        version: "dev",
+        platform: "dev",
+        mode: "ui",
+        instanceId: "openclaw-dev-smoke",
+      },
+      locale: "en-US",
+      userAgent: "gateway-smoke",
+      role: "operator",
+      scopes: ["operator.read", "operator.write", "operator.admin"],
+      caps: [],
+      auth: { token: input.token },
+    });
+
+    if (!connectRes.ok) {
+      stderr(`connect failed: ${String(connectRes.error)}`);
+      return 2;
+    }
+    if (!hasConnectHelloPayload(connectRes)) {
+      stderr("connect failed: missing hello-ok payload");
+      return 2;
+    }
+    if (hasUnpairedOperatorScopes(connectRes)) {
+      stderr("connect failed: unpaired iOS smoke unexpectedly received operator scopes");
+      return 2;
+    }
+
+    const healthRes = await request("health");
+    if (!healthRes.ok) {
+      stderr(`health failed: ${String(healthRes.error)}`);
+      return 3;
+    }
+    if (!hasHealthSummaryPayload(healthRes)) {
+      stderr("health failed: missing health summary payload");
+      return 3;
+    }
+
+    stdout("ok: connected + health");
+    return 0;
+  } finally {
+    close();
+  }
+}
 
 afterEach(async () => {
   await new Promise<void>((resolve) => {

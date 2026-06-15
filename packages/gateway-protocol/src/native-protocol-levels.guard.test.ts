@@ -174,7 +174,7 @@ describe("native Gateway protocol levels", () => {
   });
 
   it("uses the TypeScript source of truth for dev Gateway smoke scripts", async () => {
-    const devScripts = ["scripts/dev/gateway-smoke.ts", "scripts/dev/ios-node-e2e.ts"];
+    const devScripts = ["scripts/dev/ios-node-e2e.ts"];
     for (const relativePath of devScripts) {
       const content = await readRepoFile(relativePath);
       assertPattern(

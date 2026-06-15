@@ -631,7 +631,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/dev/channel-message-flows.ts",
         ["test/e2e/qa-lab/channels/channel-message-flows.e2e.test.ts"],
       ],
-      ["scripts/dev/gateway-smoke.ts", ["test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"]],
       ["scripts/qa-otel-smoke.ts", ["test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts"]],
       [
         "scripts/e2e/lib/plugin-lifecycle-matrix/sweep.sh",
