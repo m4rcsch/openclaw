@@ -1352,6 +1352,7 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     mocks.routeReply.mockClear();
+    hookMocks.runner.hasHooks.mockReturnValue(false);
 
     const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({
