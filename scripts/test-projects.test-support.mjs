@@ -656,7 +656,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/e2e/qa-lab/channels/channel-message-flows.e2e.test.ts"],
   ],
   ["scripts/dev/gateway-smoke.ts", ["test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"]],
-  ["scripts/qa-otel-smoke.ts", ["test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts"]],
   ["scripts/bundled-plugin-assets.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/bundle-a2ui.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/build-diffs-viewer-runtime.mjs", ["test/scripts/build-diffs-viewer-runtime.test.ts"]],
