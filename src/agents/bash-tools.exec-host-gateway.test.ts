@@ -86,6 +86,17 @@ const resolveExecApprovalAllowedDecisionsMock = vi.hoisted(() =>
         : ["allow-once", "allow-always", "deny"],
   ),
 );
+const resolveExecApprovalUnavailableDecisionsMock = vi.hoisted(() =>
+  vi.fn(
+    (params?: {
+      ask?: string | null;
+      allowAlwaysPersistence?: { kind: string } | null;
+    }): readonly ["allow-always"] | readonly [] =>
+      params?.ask === "always" || params?.allowAlwaysPersistence?.kind === "one-shot"
+        ? ["allow-always"]
+        : [],
+  ),
+);
 const buildEnforcedShellCommandMock = vi.hoisted(() =>
   vi.fn((): { ok: boolean; reason?: string; command?: string } => ({
     ok: false,
@@ -144,6 +155,7 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
   resolveApprovalAuditTrustPath: vi.fn(() => null),
   resolveAllowAlwaysPatterns: vi.fn(() => []),
   resolveExecApprovalAllowedDecisions: resolveExecApprovalAllowedDecisionsMock,
+  resolveExecApprovalUnavailableDecisions: resolveExecApprovalUnavailableDecisionsMock,
   addAllowlistEntry: vi.fn(),
   addDurableCommandApproval: vi.fn(),
 }));
@@ -291,6 +303,7 @@ describe("processGatewayAllowlist", () => {
     }));
     detectInterpreterInlineEvalArgvMock.mockReset();
     detectInterpreterInlineEvalArgvMock.mockReturnValue(null);
+    resolveExecApprovalUnavailableDecisionsMock.mockClear();
     buildExecApprovalPendingToolResultMock.mockReturnValue({
       details: { status: "approval-pending" },
       content: [],
