@@ -1678,6 +1678,31 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   });
 
+  it("keeps streamed reply records unchanged when a message_sending rewrite edit fails", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    installMessageSendingHook(async () => ({ content: "Redacted answer" }));
+    editMessageTelegram.mockRejectedValueOnce(new Error("edit failed"));
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Original answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context });
+
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(emitInternalMessageSentHook).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "Original answer", messageId: 2001 }),
+    );
+    expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext, 0), {
+      text: "Original answer",
+    });
+  });
+
   it("does not gate streamed replies when no message_sending hook is registered", async () => {
     setupDraftStreams({ answerMessageId: 2001 });
     const runMessageSending = vi.fn(async () => ({ cancel: true }));
@@ -2786,6 +2811,29 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(followUpTexts.join("")).toContain("one");
     expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("runs message_sending before sending long streamed final follow-up chunks", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    const longText = "one ".repeat(80);
+    const runMessageSending = installMessageSendingHook(async () => ({ cancel: true }));
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: longText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    const bot = createBot();
+
+    await dispatchWithContext({ context: createContext(), bot, textLimit: 80 });
+
+    expect(runMessageSending).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(runMessageSending, 0, 0), {
+      content: longText,
+      to: "123",
+    });
+    expect(bot.api.deleteMessage).toHaveBeenCalledWith(123, 2001);
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(emitInternalMessageSentHook).not.toHaveBeenCalled();
+    expect(recordOutboundMessageForPromptContext).not.toHaveBeenCalled();
   });
 
   it("keeps streamed final text in place when late media arrives", async () => {

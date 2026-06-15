@@ -111,14 +111,6 @@ export type ReplyDispatcherOptions = {
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
   beforeDeliver?: ReplyDispatchBeforeDeliver;
-  /**
-   * Set by channels that run the `message_sending` plugin hook themselves at
-   * delivery time (e.g. Telegram's `deliverReplies` + streaming finalizer). When
-   * true the dispatcher must NOT also compose `message_sending` into
-   * `beforeDeliver`, otherwise the hook would run twice (double rewrite/cancel)
-   * and at per-block instead of per-message granularity. See issue #92374.
-   */
-  runsMessageSendingAtDelivery?: boolean;
   onBeforeDeliverCancelled?: ReplyDispatchCancelHandler;
   /** Observe each queued payload settling, including cancellation and delivery failure. */
   onDeliverySettled?: (info: ReplyDispatchRuntimeInfo) => void;

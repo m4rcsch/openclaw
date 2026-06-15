@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "./reply-payload.js";
-import type { ReplyDispatchBeforeDeliver, ReplyDispatcher } from "./reply/reply-dispatcher.js";
+import type {
+  ReplyDispatchBeforeDeliver,
+  ReplyDispatcher,
+  ReplyDispatcherWithTypingOptions,
+} from "./reply/reply-dispatcher.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 
 type DispatchReplyFromConfigFn =
@@ -15,6 +19,9 @@ type GetGlobalHookRunnerFn = typeof import("../plugins/hook-runner-global.js").g
 type CreateReplyDispatcherFn = typeof import("./reply/reply-dispatcher.js").createReplyDispatcher;
 type CreateReplyDispatcherWithTypingFn =
   typeof import("./reply/reply-dispatcher.js").createReplyDispatcherWithTyping;
+type InternalMessageSendingDeliveryOptions = ReplyDispatcherWithTypingOptions & {
+  runsMessageSendingAtDelivery: true;
+};
 
 const hoisted = vi.hoisted(() => ({
   dispatchReplyFromConfigMock: vi.fn(),
@@ -879,7 +886,7 @@ describe("withReplyDispatcher", () => {
         deliver: async () => undefined,
         beforeDeliver: customBeforeDeliver,
         runsMessageSendingAtDelivery: true,
-      },
+      } as InternalMessageSendingDeliveryOptions,
       replyResolver: async () => ({ text: "ok" }),
     });
 

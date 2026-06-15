@@ -32,6 +32,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import type { ReplyDispatcherWithTypingOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -111,6 +112,10 @@ export {
 } from "./native-command-callback-data.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+
+type TelegramDispatcherOptions = ReplyDispatcherWithTypingOptions & {
+  runsMessageSendingAtDelivery: true;
+};
 
 type TelegramNativeCommandContext = Context & { match?: string };
 type TelegramChunkMode = ReturnType<
@@ -1333,7 +1338,7 @@ export const registerTelegramNativeCommands = ({
             onError: (err, info) => {
               runtime.error?.(danger(`telegram slash ${info.kind} reply failed: ${String(err)}`));
             },
-          },
+          } as TelegramDispatcherOptions,
           replyOptions: {
             skillFilter,
             disableBlockStreaming,

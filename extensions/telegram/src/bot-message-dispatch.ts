@@ -48,7 +48,10 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import type { BlockReplyContext } from "openclaw/plugin-sdk/reply-runtime";
+import type {
+  BlockReplyContext,
+  ReplyDispatcherWithTypingOptions,
+} from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   createSubsystemLogger,
@@ -151,6 +154,10 @@ const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-d
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
+
+type TelegramDispatcherOptions = ReplyDispatcherWithTypingOptions & {
+  runsMessageSendingAtDelivery: true;
+};
 
 type DraftPartialTextUpdate = {
   text: string;
@@ -1659,25 +1666,20 @@ export const dispatchTelegramMessage = async ({
       }
       return result.delivered;
     };
-    // Run the plugin `message_sending` hook on streamed/preview-finalized agent replies.
-    // These commit the visible message by editing the live draft, so they never traverse
-    // `deliverReplies` (where Telegram normally runs `message_sending`) and the dispatcher
-    // seam is opted out via runsMessageSendingAtDelivery. This is the one place every
-    // preview-finalized answer funnels through, so it is the canonical gate for them.
-    // The streamed text was already shown incrementally, so cancel deletes the persisted
-    // message and a rewrite edits it in place (buttons are preserved when omitted). See #92374.
+    // Streamed previews bypass deliverReplies, so gate them before the final
+    // preview is recorded or any continuation chunks are sent.
     const runStreamedFinalMessageSending = async (
-      visibleContent: string,
+      content: string,
       messageId: number,
     ): Promise<{ cancel: true } | { content: string }> => {
       const hookRunner = getGlobalHookRunner();
       if (!hookRunner?.hasHooks("message_sending")) {
-        return { content: visibleContent };
+        return { content };
       }
       const hookResult = await hookRunner.runMessageSending(
         {
           to: String(chatId),
-          content: visibleContent,
+          content,
           threadId: threadSpec.id,
           metadata: { channel: "telegram", threadId: threadSpec.id },
         },
@@ -1699,12 +1701,27 @@ export const dispatchTelegramMessage = async ({
         }
         return { cancel: true };
       }
-      if (typeof hookResult?.content === "string" && hookResult.content !== visibleContent) {
+      if (typeof hookResult?.content === "string" && hookResult.content !== content) {
+        return { content: hookResult.content };
+      }
+      return { content };
+    };
+    const gateMaterializedPreviewFinal = async (
+      result: Extract<LaneDeliveryResult, { kind: "preview-finalized" }>,
+    ): Promise<LaneDeliveryResult> => {
+      const gated = await runStreamedFinalMessageSending(
+        result.delivery.content,
+        result.delivery.messageId,
+      );
+      if ("cancel" in gated) {
+        return { kind: "preview-cancelled" };
+      }
+      if (gated.content !== result.delivery.content) {
         try {
           await (telegramDeps.editMessageTelegram ?? editMessageTelegram)(
             chatId,
-            messageId,
-            hookResult.content,
+            result.delivery.messageId,
+            gated.content,
             {
               api: bot.api,
               cfg,
@@ -1712,32 +1729,30 @@ export const dispatchTelegramMessage = async ({
               linkPreview: telegramCfg.linkPreview,
             },
           );
-          return { content: hookResult.content };
+          return {
+            ...result,
+            delivery: {
+              ...result.delivery,
+              content: gated.content,
+              promptContextContent: gated.content,
+            },
+          };
         } catch (err: unknown) {
           logVerbose(
             `telegram: message_sending rewrite could not edit streamed reply: ${formatErrorMessage(
               err,
             )}`,
           );
-          // Fall through with the rewritten content so downstream context stays consistent
-          // with the hook's intent even if the visible edit failed.
-          return { content: hookResult.content };
         }
       }
-      return { content: visibleContent };
+      return result;
     };
     const emitPreviewFinalizedHook = async (result: LaneDeliveryResult) => {
       if (isDispatchSuperseded() || result.kind !== "preview-finalized") {
         return;
       }
-      const visibleContent = result.delivery.promptContextContent ?? result.delivery.content;
-      const gated = await runStreamedFinalMessageSending(visibleContent, result.delivery.messageId);
-      if ("cancel" in gated) {
-        return;
-      }
-      const finalContent =
-        gated.content === visibleContent ? result.delivery.content : gated.content;
-      const finalPromptContext = gated.content;
+      const finalContent = result.delivery.content;
+      const finalPromptContext = result.delivery.promptContextContent ?? result.delivery.content;
       (telegramDeps.emitInternalMessageSentHook ?? emitInternalMessageSentHook)({
         sessionKeyForInternalHooks: deliveryBaseOptions.sessionKeyForInternalHooks,
         chatId: deliveryBaseOptions.chatId,
@@ -1802,16 +1817,18 @@ export const dispatchTelegramMessage = async ({
       }
       answerLane.finalized = true;
       deliveryState.markDelivered();
-      await emitPreviewFinalizedHook({
-        kind: "preview-finalized",
-        delivery: {
-          content,
-          promptContextContent: content,
-          messageId,
-          buttonsAttached: false,
-          receipt: createPreviewMessageReceipt({ id: messageId }),
-        },
-      });
+      await emitPreviewFinalizedHook(
+        await gateMaterializedPreviewFinal({
+          kind: "preview-finalized",
+          delivery: {
+            content,
+            promptContextContent: content,
+            messageId,
+            buttonsAttached: false,
+            receipt: createPreviewMessageReceipt({ id: messageId }),
+          },
+        }),
+      );
     };
     const deliverLaneText = createLaneTextDeliverer({
       lanes,
@@ -1840,6 +1857,8 @@ export const dispatchTelegramMessage = async ({
         });
       },
       resolveFinalTextCandidate: () => resolveCurrentTurnTranscriptFinalText(),
+      beforeFinalizePreviewDelivery: async ({ content, messageId }) =>
+        await runStreamedFinalMessageSending(content, messageId),
       log: logVerbose,
       markDelivered: () => {
         deliveryState.markDelivered();
@@ -1873,15 +1892,17 @@ export const dispatchTelegramMessage = async ({
         await answerLane.stream.stop();
         answerLane.finalized = true;
         deliveryState.markDelivered();
-        await emitPreviewFinalizedHook({
-          kind: "preview-finalized",
-          delivery: {
-            content: text,
-            promptContextContent: deliveredText,
-            messageId,
-            receipt: createPreviewMessageReceipt({ id: messageId }),
-          },
-        });
+        await emitPreviewFinalizedHook(
+          await gateMaterializedPreviewFinal({
+            kind: "preview-finalized",
+            delivery: {
+              content: text,
+              promptContextContent: deliveredText,
+              messageId,
+              receipt: createPreviewMessageReceipt({ id: messageId }),
+            },
+          }),
+        );
         return true;
       }
       const result = await deliverLaneText({
@@ -2338,7 +2359,7 @@ export const dispatchTelegramMessage = async ({
                     deliveryState.markNonSilentFailure();
                     runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
                   },
-                },
+                } as TelegramDispatcherOptions,
                 replyOptions: {
                   skillFilter,
                   disableBlockStreaming,

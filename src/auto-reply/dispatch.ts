@@ -56,8 +56,18 @@ type ReplyPayloadRunState = {
   runId?: string;
 };
 
+type MessageSendingDeliveryDispatcherOptions = {
+  runsMessageSendingAtDelivery?: boolean;
+};
+
 const foregroundReplyFenceByKey = new Map<string, ForegroundReplyFenceState>();
 const replyPayloadSendingDispatchers = new WeakSet<ReplyDispatcher>();
+
+function runsMessageSendingAtDelivery(
+  options: ReplyDispatcherOptions | ReplyDispatcherWithTypingOptions,
+): boolean {
+  return (options as MessageSendingDeliveryDispatcherOptions).runsMessageSendingAtDelivery === true;
+}
 
 function applyRuntimeToolsAllow(
   replyOptions: Omit<GetReplyOptions, "onBlockReply"> | undefined,
@@ -573,10 +583,9 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
     replyPayloadRunState,
   );
   // A channel-supplied beforeDeliver must compose WITH the canonical message_sending
-  // gate, not replace it (issue #92374). Channels that run message_sending themselves
-  // at delivery time opt out via runsMessageSendingAtDelivery so the hook stays
-  // exactly-once and per-message rather than per-streamed-block.
-  const messageSendingBeforeDeliver = params.dispatcherOptions.runsMessageSendingAtDelivery
+  // gate, not replace it. Internal durable delivery paths that run message_sending
+  // at send time opt out so the hook stays exactly-once and per-message.
+  const messageSendingBeforeDeliver = runsMessageSendingAtDelivery(params.dispatcherOptions)
     ? undefined
     : buildMessageSendingBeforeDeliver(finalized);
   const globalBeforeDeliver = combineBeforeDeliverHooks(
@@ -683,9 +692,9 @@ export async function dispatchInboundMessageWithDispatcher(params: {
     replyPayloadRunState,
   );
   // See dispatchInboundMessageWithBufferedDispatcher: compose the channel-supplied
-  // beforeDeliver WITH the canonical message_sending gate (issue #92374), unless the
-  // channel runs message_sending itself at delivery time.
-  const messageSendingBeforeDeliver = params.dispatcherOptions.runsMessageSendingAtDelivery
+  // beforeDeliver WITH the canonical message_sending gate, unless the channel runs
+  // message_sending itself at delivery time.
+  const messageSendingBeforeDeliver = runsMessageSendingAtDelivery(params.dispatcherOptions)
     ? undefined
     : buildMessageSendingBeforeDeliver(params.ctx);
   const globalBeforeDeliver = combineBeforeDeliverHooks(
