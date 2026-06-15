@@ -64,11 +64,24 @@ setupRunAttemptTestHooks();
 describe("runCodexAppServerAttempt dynamic tools", () => {
   it("preserves model order across queued native and dynamic tools", async () => {
     let rejectSlowTool!: (error: Error) => void;
+    let slowToolTimeout: ReturnType<typeof setTimeout> | undefined;
     const slowToolResult = new Promise<never>((_resolve, reject) => {
-      rejectSlowTool = reject;
+      rejectSlowTool = (error) => {
+        if (slowToolTimeout) {
+          clearTimeout(slowToolTimeout);
+          slowToolTimeout = undefined;
+        }
+        reject(error);
+      };
     });
+    void slowToolResult.catch(() => undefined);
     const slowTool = createRuntimeDynamicTool("slow_failure");
-    slowTool.execute = vi.fn(() => slowToolResult);
+    slowTool.execute = vi.fn(() => {
+      slowToolTimeout = setTimeout(() => {
+        rejectSlowTool(new Error("slow failure"));
+      }, 1_000);
+      return slowToolResult;
+    });
     const laterTool = createTerminalPresentationContractTool({
       name: "fast_summary",
       result: textToolResult("fast result"),
@@ -155,7 +168,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         },
       },
     });
-    await harness.notify({
+    const laterRaw = harness.notify({
       method: "rawResponseItem/completed",
       params: {
         threadId: "thread-1",
@@ -180,6 +193,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         arguments: {},
       },
     });
+    void slowCall.catch(() => undefined);
     const nativeItem = {
       type: "commandExecution",
       id: "command-before-dynamic",
@@ -197,7 +211,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       method: "item/started",
       params: { threadId: "thread-1", turnId: "turn-1", item: nativeItem },
     });
-    await harness.handleServerRequest({
+    const laterCall = harness.handleServerRequest({
       id: "request-later",
       method: "item/tool/call",
       params: {
@@ -209,6 +223,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         arguments: {},
       },
     });
+    void laterCall.catch(() => undefined);
     await nativeStarted;
     await webSearchStarted;
     await harness.notify({
@@ -221,6 +236,8 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     });
     rejectSlowTool(new Error("slow failure"));
     await slowCall;
+    await laterCall;
+    await laterRaw;
     await rawWebSearch;
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
