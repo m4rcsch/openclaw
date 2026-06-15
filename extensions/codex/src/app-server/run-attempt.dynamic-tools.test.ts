@@ -168,7 +168,6 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         },
       },
     });
-    await rawWebSearch;
     const slowCall = harness.handleServerRequest({
       id: "request-slow",
       method: "item/tool/call",
@@ -222,6 +221,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     });
     rejectSlowTool(new Error("slow failure"));
     await slowCall;
+    await rawWebSearch;
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 

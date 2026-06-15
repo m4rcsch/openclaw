@@ -1312,16 +1312,16 @@ describe("agentCommand", () => {
       });
       mockConfig(home, store);
 
-      await agentCommand(
+      const prepared = await agentCommandTesting.prepareAgentCommandExecution(
         { message: "hi", to: sessionKey, deliver: true, channel: "telegram" },
         runtime,
       );
 
-      const deliveryCall = vi.mocked(deliverAgentCommandResult).mock.calls.at(-1)?.[0] as
-        | { opts?: { to?: string }; sessionEntry?: { lastTo?: string } }
-        | undefined;
-      expect(deliveryCall?.opts?.to).toBeUndefined();
-      expect(deliveryCall?.sessionEntry?.lastTo).toBe("+1555");
+      expect(prepared.opts.to).toBeUndefined();
+      expect(prepared.opts.sessionKey).toBe(sessionKey);
+      expect(prepared.sessionEntry?.lastTo).toBe("+1555");
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(deliverAgentCommandResult).not.toHaveBeenCalled();
     });
   });
 

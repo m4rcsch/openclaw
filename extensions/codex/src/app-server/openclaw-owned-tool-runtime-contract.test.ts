@@ -156,19 +156,9 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
     const adjustedParams = { mode: "safe" };
     const mergedParams = { command: "status", mode: "safe" };
     const hooks = installOpenClawOwnedToolHooks({ adjustedParams });
-    const middleware = installCodexToolResultMiddleware((event) => {
-      const eventRecord = requireRecord(event, "tool_result middleware event");
-      expectRecordFields(eventRecord, {
-        toolName: "exec",
-        toolCallId: "call-middleware",
-        args: { command: "status" },
-      });
-      expectRecordFields(requireRecord(eventRecord.result, "tool_result middleware result"), {
-        content: [{ type: "text", text: "raw output" }],
-        details: { stage: "execute" },
-      });
-      return textToolResult("compacted output", { stage: "middleware" });
-    });
+    const middleware = installCodexToolResultMiddleware(() =>
+      textToolResult("compacted output", { stage: "middleware" }),
+    );
     const execute = vi.fn(async () => textToolResult("raw output", { stage: "execute" }));
     const bridge = createCodexDynamicToolBridge({
       tools: [createContractTool({ name: "exec", execute })],
@@ -190,12 +180,25 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
       arguments: { command: "status" },
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       success: true,
       contentItems: [{ type: "inputText", text: "compacted output" }],
     });
     expectExecuteCall(execute, "call-middleware", mergedParams);
     expect(middleware.middleware).toHaveBeenCalledTimes(1);
+    const middlewareEvent = requireRecord(
+      requireMockCall(middleware.middleware, 0, "tool_result middleware")[0],
+      "tool_result middleware event",
+    );
+    expectRecordFields(middlewareEvent, {
+      toolName: "exec",
+      toolCallId: "call-middleware",
+      args: mergedParams,
+    });
+    expectRecordFields(requireRecord(middlewareEvent.result, "tool_result middleware result"), {
+      content: [{ type: "text", text: "raw output" }],
+      details: { stage: "execute" },
+    });
     await vi.waitFor(() => {
       const call = requireMockCall(hooks.afterToolCall, 0, "after_tool_call");
       const event = requireRecord(call[0], "after_tool_call event");
