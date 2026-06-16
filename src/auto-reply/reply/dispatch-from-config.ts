@@ -268,7 +268,7 @@ function isSlackDirectRoutedThreadTurn(
 }
 
 function shouldLetSlackRoutedThreadBypassBusyReplyOperation(params: {
-  activeOperation?: ReplyOperation;
+  activeOperation?: Pick<ReplyOperation, "routeThreadId">;
   ctx: FinalizedMsgContext;
   routeThreadId?: string | number;
 }): boolean {
@@ -502,6 +502,7 @@ function resolveFinalRouteReplyMirrorOption(payload: ReplyPayload): boolean | un
 export const testing = {
   createReplyDispatchEvent,
   resolveFinalRouteReplyMirrorOption,
+  shouldLetSlackRoutedThreadBypassBusyReplyOperation,
 };
 
 function resolveHarnessDefaultChannel(params: {
