@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.6.16
+
+### Fixes
+
+- Alpha/nightly release validation carries generated release metadata refreshes for the June 16 candidate.
+
 ## 2026.6.8
 
 ### Highlights
