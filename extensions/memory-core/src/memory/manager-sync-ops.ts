@@ -1518,6 +1518,7 @@ export abstract class MemoryManagerSyncOps {
     const pending = Array.from(this.sessionPendingFiles);
     this.sessionPendingFiles.clear();
     let shouldSync = false;
+    let needsFullSessionEnumeration = false;
     for (const sessionFile of pending) {
       // Usage-counted session archives (`.jsonl.reset.<iso>` and
       // `.jsonl.deleted.<iso>`) are one-shot mutation events: the file is
@@ -1534,6 +1535,7 @@ export abstract class MemoryManagerSyncOps {
       ) {
         this.sessionsDirtyFiles.add(sessionFile);
         this.sessionsDirty = true;
+        needsFullSessionEnumeration = true;
         shouldSync = true;
         continue;
       }
@@ -1561,11 +1563,12 @@ export abstract class MemoryManagerSyncOps {
       shouldSync = true;
     }
     if (shouldSync) {
-      // The dirty set already names every transcript this sync must index, so
-      // pass it through and skip the sessions-dir enumeration (expensive on
-      // networked filesystems). Periodically fall back to a full enumeration
-      // so out-of-band deletions still get their stale index rows pruned.
+      // The dirty set already names every live transcript this sync must index,
+      // so pass it through and skip the sessions-dir enumeration (expensive on
+      // networked filesystems). Archive/reset events force a full enumeration
+      // because their old live transcript row must be pruned authoritatively.
       const reconcileDue =
+        needsFullSessionEnumeration ||
         Date.now() - this.lastSessionPruneReconcileAt >= SESSION_PRUNE_RECONCILE_INTERVAL_MS;
       const syncParams = reconcileDue
         ? { reason: "session-delta" }

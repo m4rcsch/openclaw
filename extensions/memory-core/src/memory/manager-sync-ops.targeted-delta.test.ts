@@ -108,8 +108,17 @@ class TargetedDeltaHarness extends MemoryManagerSyncOps {
   protected async indexFile(): Promise<void> {}
 }
 
-// Archive artifacts route through the direct mark-dirty branch of the delta
-// batch, so tests need no transcript fixtures or delta accounting.
+function liveSessionFile(name: string): string {
+  return path.join(resolveSessionTranscriptsDirForAgent("main"), `${name}.jsonl`);
+}
+
+async function writeLargeLiveSession(name: string): Promise<string> {
+  const file = liveSessionFile(name);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, "x".repeat(100_000), "utf8");
+  return file;
+}
+
 function archiveSessionFile(name: string): string {
   return path.join(
     resolveSessionTranscriptsDirForAgent("main"),
@@ -134,18 +143,18 @@ describe("session delta sync targeting", () => {
   it("passes the dirty set as sync targets inside the reconcile window", async () => {
     const harness = new TargetedDeltaHarness();
     harness.setLastReconcileAt(Date.now());
-    const archived = archiveSessionFile("thread-a");
+    const live = await writeLargeLiveSession("thread-a");
 
-    await harness.runDeltaBatch([archived]);
+    await harness.runDeltaBatch([live]);
 
-    expect(harness.syncCalls).toEqual([{ reason: "session-delta", sessionFiles: [archived] }]);
+    expect(harness.syncCalls).toEqual([{ reason: "session-delta", sessionFiles: [live] }]);
   });
 
   it("includes leftover dirty files from earlier syncs in the targets", async () => {
     const harness = new TargetedDeltaHarness();
     harness.setLastReconcileAt(Date.now());
-    const leftover = archiveSessionFile("thread-leftover");
-    const fresh = archiveSessionFile("thread-fresh");
+    const leftover = liveSessionFile("thread-leftover");
+    const fresh = await writeLargeLiveSession("thread-fresh");
     harness.addDirtyFile(leftover);
 
     await harness.runDeltaBatch([fresh]);
@@ -155,12 +164,21 @@ describe("session delta sync targeting", () => {
     expect(new Set(harness.syncCalls[0]?.sessionFiles)).toEqual(new Set([leftover, fresh]));
   });
 
+  it("forces archive events through a full enumeration inside the reconcile window", async () => {
+    const harness = new TargetedDeltaHarness();
+    harness.setLastReconcileAt(Date.now());
+
+    await harness.runDeltaBatch([archiveSessionFile("thread-archive")]);
+
+    expect(harness.syncCalls).toEqual([{ reason: "session-delta" }]);
+  });
+
   it("falls back to a full enumeration once the reconcile window elapses", async () => {
     // lastSessionPruneReconcileAt starts at 0, so the first active delta sync
     // reconciles with a full enumeration unless a prior prune already ran.
     const harness = new TargetedDeltaHarness();
 
-    await harness.runDeltaBatch([archiveSessionFile("thread-b")]);
+    await harness.runDeltaBatch([await writeLargeLiveSession("thread-b")]);
 
     expect(harness.syncCalls).toEqual([{ reason: "session-delta" }]);
   });
