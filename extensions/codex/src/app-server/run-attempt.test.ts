@@ -1663,6 +1663,7 @@ describe("runCodexAppServerAttempt", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
     params.disableMessageTool = true;
+    params.sourceReplyDeliveryMode = "message_tool_only";
     params.runtimePlan = createCodexRuntimePlanFixture();
 
     const availableTools = await buildDynamicToolsForTest(params, workspaceDir);
