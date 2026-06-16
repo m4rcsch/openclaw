@@ -10,6 +10,8 @@ profiles:
     description: Deterministic PR and merge proof with mock model providers, synthetic qa-channel,
       and local SDK-backed channel upstreams; no live external service required.
     evidenceMode: slim
+    channelDriver: crabline
+    channel: telegram
     categoryIds:
       - agent-runtime-and-provider-execution.agent-turn-execution
       - session-memory-and-context-engine.token-management
@@ -31,6 +33,7 @@ profiles:
     description: Stable/LTS proof selector for live providers, live channels, package artifacts,
       upgrade paths, and platform proof where the claim depends on real upstreams or release
       artifacts.
+    channelDriver: live
     includeAllCategories: true
 levels:
   - id: planned

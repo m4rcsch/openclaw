@@ -74,6 +74,7 @@ import {
   readQaScorecardTaxonomyReport,
   type QaScorecardCategoryCoverageReport,
   type QaScorecardEvidenceMode,
+  type QaScorecardProfileReport,
 } from "./scorecard-taxonomy.js";
 import { isQaSelfCheckSuccessful } from "./self-check.js";
 import { runQaFlowSuiteFromRuntime, runQaSuite } from "./suite-launch.runtime.js";
@@ -637,6 +638,10 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     opts.profile,
     scorecardReport.profiles.map((entry) => entry.id),
   );
+  const profileReport = scorecardReport.profiles.find((entry) => entry.id === profile);
+  if (!profileReport) {
+    throw new Error(`taxonomy.yaml does not define QA run profile ${profile}.`);
+  }
   const categories = scorecardReport.categories.filter((category) =>
     qaScorecardCategoryMatchesRunProfile(category, {
       profile,
@@ -687,6 +692,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       scenarioIds: scenarios.map((scenario) => scenario.id),
       concurrency: opts.concurrency,
       allowFailures: opts.allowFailures,
+      ...qaSuiteChannelDriverOptionsForProfile(profileReport),
     });
     evidencePath =
       suiteResult && "evidencePath" in suiteResult ? suiteResult.evidencePath : undefined;
@@ -705,6 +711,18 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     categories,
   });
   process.stdout.write(`QA profile scorecard: ${evidencePath}\n`);
+}
+
+function qaSuiteChannelDriverOptionsForProfile(
+  profile: QaScorecardProfileReport,
+): Pick<QaSuiteCommandOptions, "channelDriver" | "channel"> {
+  if (profile.channelDriver !== "crabline") {
+    return {};
+  }
+  return {
+    channelDriver: profile.channelDriver,
+    channel: profile.channel ?? undefined,
+  };
 }
 
 function normalizeQaRunProfile(value: string, profileIds: readonly string[]) {
