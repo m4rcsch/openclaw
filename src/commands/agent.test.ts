@@ -365,6 +365,7 @@ function installThinkingTestProviders(channels: Parameters<typeof createTestRegi
 }
 
 beforeEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
   resetPluginRuntimeStateForTest();
   installThinkingTestProviders();
