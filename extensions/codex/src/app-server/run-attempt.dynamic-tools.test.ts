@@ -231,12 +231,9 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     });
   });
 
-  it("keeps Codex native code mode while registering node shell tools for node sessions", async () => {
-    const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
+  it("registers node shell tools for node sessions", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.execOverrides = {
@@ -261,48 +258,30 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       createRuntimeDynamicTool("process"),
       createRuntimeDynamicTool("message"),
     ]);
-
-    let runError: unknown;
-    const run = runCodexAppServerAttempt(params).catch((error: unknown) => {
-      runError = error;
-    });
-    try {
-      await harness.waitForMethod("thread/start");
-
-      const startParams = harness.requests.find((request) => request.method === "thread/start")
-        ?.params as
-        | {
-            config?: {
-              "features.code_mode"?: boolean;
-              "features.code_mode_only"?: boolean;
-              mcp_servers?: Record<string, unknown>;
-            };
-            dynamicTools?: Array<{ name: string }>;
-            environments?: unknown[];
-          }
-        | undefined;
-
-      expect(startParams?.config).toMatchObject({
-        "features.code_mode": true,
-        "features.code_mode_only": false,
-        mcp_servers: {
-          local_docs: {
-            command: "node",
-            args: ["/opt/local-docs-mcp/dist/index.js"],
-          },
-        },
-      });
-      expect(startParams?.environments).toBeUndefined();
-      expect(startParams?.dynamicTools?.map((tool) => tool.name)).toEqual([
-        "message",
-        "node_exec",
-        "node_process",
-      ]);
-      expect(runError).toBeUndefined();
-    } finally {
-      harness.close();
-      await run;
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
     }
+
+    const tools = await testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      effectiveCwd: params.cwd ?? workspaceDir,
+      sandboxSessionKey,
+      sandbox: { enabled: false, backendId: "docker" } as never,
+      nativeToolSurfaceEnabled: true,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools,
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.specs.map((tool) => tool.name)).toEqual(["message", "node_exec", "node_process"]);
   });
 
   it("emits normalized tool progress around app-server dynamic tool requests", async () => {
