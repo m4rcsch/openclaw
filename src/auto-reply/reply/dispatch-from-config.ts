@@ -491,9 +491,17 @@ function createReplyDispatchEvent(
   }) as PluginHookReplyDispatchEvent;
 }
 
+function resolveFinalRouteReplyMirrorOption(payload: ReplyPayload): boolean | undefined {
+  const metadata = getReplyPayloadMetadata(payload);
+  const hasTranscriptOwner =
+    metadata?.assistantMessageIndex !== undefined || metadata?.assistantTranscriptOwned === true;
+  return hasTranscriptOwner ? false : undefined;
+}
+
 /** Test-only hooks for overriding selected dispatch dependencies. */
 export const testing = {
   createReplyDispatchEvent,
+  resolveFinalRouteReplyMirrorOption,
 };
 
 function resolveHarnessDefaultChannel(params: {
@@ -2344,10 +2352,11 @@ export async function dispatchReplyFromConfig(
       throwIfFinalDeliveryAborted();
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
       throwIfFinalDeliveryAborted();
+      const finalRouteReplyMirror = resolveFinalRouteReplyMirrorOption(normalizedPayload);
       const result = await routeReplyToOriginating(normalizedPayload, {
         abortSignal,
         kind: "final",
-        ...(hasTranscriptOwner ? { mirror: false } : {}),
+        ...(finalRouteReplyMirror !== undefined ? { mirror: finalRouteReplyMirror } : {}),
       });
       if (result) {
         if (!result.ok) {
