@@ -28,7 +28,6 @@ const qaScorecardProfileSchema = z.object({
   evidenceMode: qaScorecardEvidenceModeSchema.optional(),
   includeAllCategories: z.boolean().default(false),
   channelDriver: qaScorecardChannelDriverSchema.default("qa-channel"),
-  channel: qaScorecardIdSchema.optional(),
   categoryIds: z.array(qaScorecardIdSchema).default([]),
 });
 
@@ -76,20 +75,6 @@ const qaMaturityTaxonomySchema = z
           code: z.ZodIssueCode.custom,
           path: ["profiles", profileIndex, "categoryIds"],
           message: `profile ${profile.id} cannot set categoryIds when includeAllCategories is true`,
-        });
-      }
-      if (profile.channelDriver === "crabline" && !profile.channel) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["profiles", profileIndex, "channel"],
-          message: `profile ${profile.id} requires channel when channelDriver is crabline`,
-        });
-      }
-      if (profile.channelDriver !== "crabline" && profile.channel) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["profiles", profileIndex, "channel"],
-          message: `profile ${profile.id} can only set channel when channelDriver is crabline`,
         });
       }
       if (profile.channelDriver === "crabline" && profile.includeAllCategories) {
@@ -171,7 +156,6 @@ export type QaScorecardProfileReport = {
   id: string;
   evidenceMode: QaScorecardEvidenceMode;
   channelDriver: QaScorecardChannelDriver;
-  channel: string | null;
   categoryIds: string[];
 };
 
@@ -382,7 +366,7 @@ export function readQaScorecardFeatureCoverageByCategory(repoRoot?: string) {
 export function readQaScorecardProfileOptions(profileId: string | undefined, repoRoot?: string) {
   const profile = profileId?.trim();
   if (!profile) {
-    return { evidenceMode: "full" as const, channelDriver: "qa-channel" as const, channel: null };
+    return { evidenceMode: "full" as const, channelDriver: "qa-channel" as const };
   }
   const profileOptions = readQaMaturityTaxonomy(repoRoot)?.profiles.find(
     (entry) => entry.id === profile,
@@ -390,7 +374,6 @@ export function readQaScorecardProfileOptions(profileId: string | undefined, rep
   return {
     evidenceMode: profileOptions?.evidenceMode ?? "full",
     channelDriver: profileOptions?.channelDriver ?? "qa-channel",
-    channel: profileOptions?.channel ?? null,
   };
 }
 
@@ -534,7 +517,6 @@ export function buildQaScorecardTaxonomyReport(params: {
         id: profile.id,
         evidenceMode: profile.evidenceMode ?? "full",
         channelDriver: profile.channelDriver,
-        channel: profile.channel ?? null,
         categoryIds: validCategoryIds,
       };
     }) ?? [];
