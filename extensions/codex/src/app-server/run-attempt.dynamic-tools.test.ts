@@ -262,42 +262,53 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       createRuntimeDynamicTool("message"),
     ]);
 
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("thread/start");
-    await harness.waitForMethod("turn/start");
-
-    const startParams = harness.requests.find((request) => request.method === "thread/start")
-      ?.params as
-      | {
-          config?: {
-            "features.code_mode"?: boolean;
-            "features.code_mode_only"?: boolean;
-            mcp_servers?: Record<string, unknown>;
-          };
-          dynamicTools?: Array<{ name: string }>;
-          environments?: unknown[];
-        }
-      | undefined;
-
-    expect(startParams?.config).toMatchObject({
-      "features.code_mode": true,
-      "features.code_mode_only": false,
-      mcp_servers: {
-        local_docs: {
-          command: "node",
-          args: ["/opt/local-docs-mcp/dist/index.js"],
-        },
-      },
+    let runError: unknown;
+    const run = runCodexAppServerAttempt(params).catch((error: unknown) => {
+      runError = error;
     });
-    expect(startParams?.environments).toBeUndefined();
-    expect(startParams?.dynamicTools?.map((tool) => tool.name)).toEqual([
-      "message",
-      "node_exec",
-      "node_process",
-    ]);
+    try {
+      await harness.waitForMethod("thread/start");
+      await harness.waitForMethod("turn/start");
 
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+      const startParams = harness.requests.find((request) => request.method === "thread/start")
+        ?.params as
+        | {
+            config?: {
+              "features.code_mode"?: boolean;
+              "features.code_mode_only"?: boolean;
+              mcp_servers?: Record<string, unknown>;
+            };
+            dynamicTools?: Array<{ name: string }>;
+            environments?: unknown[];
+          }
+        | undefined;
+
+      expect(startParams?.config).toMatchObject({
+        "features.code_mode": true,
+        "features.code_mode_only": false,
+        mcp_servers: {
+          local_docs: {
+            command: "node",
+            args: ["/opt/local-docs-mcp/dist/index.js"],
+          },
+        },
+      });
+      expect(startParams?.environments).toBeUndefined();
+      expect(startParams?.dynamicTools?.map((tool) => tool.name)).toEqual([
+        "message",
+        "node_exec",
+        "node_process",
+      ]);
+      expect(runError).toBeUndefined();
+    } finally {
+      harness.close();
+      await Promise.race([
+        run,
+        new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        }),
+      ]);
+    }
   });
 
   it("emits normalized tool progress around app-server dynamic tool requests", async () => {
