@@ -1628,50 +1628,22 @@ describe("dispatchReplyFromConfig", () => {
     }
   });
 
-  it("keeps non-Slack routed direct turns behind the active reply operation", async () => {
-    setNoAbort();
-    installThreadingTestPlugin({ id: "telegram" });
-    const sessionKey = "agent:main:telegram:direct:1";
-    const activeOperation = createReplyOperation({
-      sessionKey,
-      sessionId: "active-session",
-      resetTriggered: false,
-      routeThreadId: "500.000",
-    });
-    activeOperation.setPhase("running");
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
-
-    const resultPromise = dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "telegram",
-        Surface: "telegram",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "user:1",
-        ChatType: "direct",
-        SessionKey: sessionKey,
-        MessageThreadId: "501.000",
-        BodyForAgent: "second telegram direct turn",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    try {
-      const result = await Promise.race([
-        resultPromise,
-        new Promise<"blocked">((resolve) => {
-          setTimeout(() => resolve("blocked"), 1_000);
+  it("keeps non-Slack routed direct turns behind the active reply operation", () => {
+    const shouldBypass =
+      dispatchFromConfigTesting.shouldLetSlackRoutedThreadBypassBusyReplyOperation({
+        activeOperation: { routeThreadId: "500.000" },
+        ctx: buildTestCtx({
+          Provider: "telegram",
+          Surface: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "user:1",
+          ChatType: "direct",
+          MessageThreadId: "501.000",
         }),
-      ]);
+        routeThreadId: "501.000",
+      });
 
-      expect(result).toBe("blocked");
-      expect(replyResolver).not.toHaveBeenCalled();
-    } finally {
-      activeOperation.complete();
-      await resultPromise;
-    }
+    expect(shouldBypass).toBe(false);
   });
 
   it("routes when OriginatingChannel differs from Provider", async () => {
