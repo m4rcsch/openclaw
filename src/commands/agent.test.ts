@@ -7,7 +7,6 @@ import "./agent-command.test-mocks.js";
 import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
-import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
@@ -1320,30 +1319,14 @@ describe("agentCommand", () => {
         },
       });
       mockConfig(home, store);
-      installThinkingTestProviders([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "telegram",
-            outbound: createDirectOutboundTestAdapter({ channel: "telegram" }),
-          }),
-        },
-      ]);
-      vi.mocked(attemptExecutionRuntime.runAgentAttempt).mockResolvedValueOnce(
-        createDefaultAgentResult(),
-      );
-
-      await agentCommand(
+      const prepared = await agentCommandTesting.prepareAgentCommandExecution(
         { message: "hi", to: sessionKey, deliver: true, channel: "telegram" },
         runtime,
       );
 
-      const deliveryCall = vi.mocked(deliverAgentCommandResult).mock.calls.at(-1)?.[0] as
-        | { opts?: { to?: string }; sessionEntry?: { lastTo?: string } }
-        | undefined;
-      expect(deliveryCall?.opts?.to).toBeUndefined();
-      expect(deliveryCall?.sessionEntry?.lastTo).toBe("+1555");
+      expect(prepared.opts.to).toBeUndefined();
+      expect(prepared.opts.sessionKey).toBe(sessionKey);
+      expect(prepared.sessionEntry?.lastTo).toBe("+1555");
     });
   });
 
