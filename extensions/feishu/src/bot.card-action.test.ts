@@ -155,6 +155,10 @@ describe("Feishu Card Action Handler", () => {
     return requireRecord(handleMessageEvent(callIndex).message, "Feishu message");
   }
 
+  function handleMessageContent(callIndex = 0) {
+    return JSON.parse(String(handleMessage(callIndex).content)) as Record<string, unknown>;
+  }
+
   function sendMessageCall(callIndex = 0) {
     return requireRecord(
       mockCallArg(sendMessageFeishuMock, callIndex, "sendMessageFeishu"),
@@ -208,6 +212,100 @@ describe("Feishu Card Action Handler", () => {
     const message = handleMessage();
     expect(message.content).toBe('{"text":"{\\"key\\":\\"val\\"}"}');
     expect(message.chat_id).toBe("u123"); // Fallback to open_id
+  });
+
+  it("preserves single-select metadata without breaking command extraction", async () => {
+    const event = createCardActionEvent({
+      token: "tok2-option-command",
+      actionValue: { command: "/choose blue" },
+    });
+    event.action = {
+      ...event.action,
+      tag: "select_static",
+      name: "choice",
+      option: "blue",
+    };
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(handleMessageContent()).toEqual({
+      text: "/choose blue",
+      card_action: {
+        action: "select_static",
+        value: { command: "/choose blue" },
+        name: "choice",
+        option: "blue",
+      },
+    });
+  });
+
+  it("preserves empty multi-select metadata as an explicit payload", async () => {
+    const event = createCardActionEvent({
+      token: "tok2-empty-options",
+      actionValue: {},
+    });
+    event.action = {
+      ...event.action,
+      tag: "multi_select",
+      name: "choices",
+      options: [],
+    };
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    const outerContent = handleMessageContent();
+    expect(outerContent.card_action).toEqual({
+      action: "multi_select",
+      name: "choices",
+      options: [],
+    });
+    expect(JSON.parse(String(outerContent.text))).toEqual(outerContent.card_action);
+  });
+
+  it("preserves empty form submissions as distinct from absent form data", async () => {
+    const event = createCardActionEvent({
+      token: "tok2-empty-form",
+      actionValue: {},
+    });
+    event.action = {
+      ...event.action,
+      tag: "form",
+      name: "survey",
+      form_value: {},
+    };
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    const outerContent = handleMessageContent();
+    expect(outerContent.card_action).toEqual({
+      action: "form",
+      name: "survey",
+      form_value: {},
+    });
+    expect(JSON.parse(String(outerContent.text))).toEqual(outerContent.card_action);
+  });
+
+  it("preserves input values with their component name", async () => {
+    const event = createCardActionEvent({
+      token: "tok2-input",
+      actionValue: {},
+    });
+    event.action = {
+      ...event.action,
+      tag: "input",
+      name: "summary",
+      input_value: "ship it",
+    };
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    const outerContent = handleMessageContent();
+    expect(outerContent.card_action).toEqual({
+      action: "input",
+      name: "summary",
+      input_value: "ship it",
+    });
+    expect(JSON.parse(String(outerContent.text))).toEqual(outerContent.card_action);
   });
 
   it("routes quick command actions with operator and conversation context", async () => {

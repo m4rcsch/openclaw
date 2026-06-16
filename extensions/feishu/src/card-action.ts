@@ -7,7 +7,10 @@ import {
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
-import { decodeFeishuCardAction, buildFeishuCardActionTextFallback } from "./card-interaction.js";
+import {
+  decodeFeishuCardAction,
+  type FeishuCardActionMetadataPayload,
+} from "./card-interaction.js";
 import {
   createApprovalCard,
   FEISHU_APPROVAL_CANCEL_ACTION,
@@ -27,6 +30,11 @@ export type FeishuCardActionEvent = {
   action: {
     value: Record<string, unknown>;
     tag: string;
+    name?: string;
+    input_value?: unknown;
+    option?: unknown;
+    options?: unknown;
+    form_value?: unknown;
   };
   open_message_id?: string;
   context: {
@@ -134,6 +142,7 @@ function buildSyntheticMessageEvent(
   event: FeishuCardActionEvent,
   content: string,
   chatType: "p2p" | "group",
+  metadataPayload?: FeishuCardActionMetadataPayload,
 ): FeishuMessageEvent {
   const replyTargetMessageId = event.context.open_message_id ?? event.open_message_id;
   return {
@@ -152,7 +161,10 @@ function buildSyntheticMessageEvent(
       chat_id: event.context.chat_id || event.operator.open_id,
       chat_type: chatType,
       message_type: "text",
-      content: JSON.stringify({ text: content }),
+      content: JSON.stringify({
+        text: content,
+        ...(metadataPayload ? { card_action: metadataPayload } : {}),
+      }),
     },
   };
 }
@@ -175,6 +187,7 @@ async function dispatchSyntheticCommand(params: {
   channelRuntime?: PluginRuntime["channel"];
   accountId?: string;
   chatType?: "p2p" | "group";
+  metadataPayload?: FeishuCardActionMetadataPayload;
 }): Promise<void> {
   const resolvedChatType = await resolveCardActionChatType({
     event: params.event,
@@ -184,7 +197,12 @@ async function dispatchSyntheticCommand(params: {
   });
   await handleFeishuMessage({
     cfg: params.cfg,
-    event: buildSyntheticMessageEvent(params.event, params.command, resolvedChatType),
+    event: buildSyntheticMessageEvent(
+      params.event,
+      params.command,
+      resolvedChatType,
+      params.metadataPayload,
+    ),
     botOpenId: params.botOpenId,
     runtime: params.runtime,
     channelRuntime: params.channelRuntime,
@@ -473,6 +491,7 @@ export async function handleFeishuCardAction(params: {
           channelRuntime: params.channelRuntime,
           accountId,
           chatType: envelope.c?.t,
+          metadataPayload: decoded.payload,
         });
         completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
         return;
@@ -488,7 +507,7 @@ export async function handleFeishuCardAction(params: {
       return;
     }
 
-    const content = buildFeishuCardActionTextFallback(event);
+    const content = decoded.text;
 
     log(
       `feishu[${account.accountId}]: handling card action from ${event.operator.open_id}: ${content}`,
@@ -503,6 +522,7 @@ export async function handleFeishuCardAction(params: {
       runtime,
       channelRuntime: params.channelRuntime,
       accountId,
+      metadataPayload: decoded.payload,
     });
     completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
   } catch (err) {

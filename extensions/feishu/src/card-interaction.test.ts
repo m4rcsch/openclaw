@@ -55,6 +55,64 @@ describe("feishu card interaction decoder", () => {
     ).toBe("/new");
   });
 
+  it("preserves legacy card-action sibling metadata", () => {
+    const result = decodeFeishuCardAction({
+      event: {
+        operator: { open_id: "u123" },
+        context: { chat_id: "chat1" },
+        action: {
+          tag: "select_static",
+          name: "choice",
+          value: { command: "/choose blue" },
+          option: "blue",
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      kind: "legacy",
+      text: "/choose blue",
+      payload: {
+        action: "select_static",
+        value: { command: "/choose blue" },
+        name: "choice",
+        option: "blue",
+      },
+    });
+  });
+
+  it("preserves empty legacy card-action collections", () => {
+    const result = decodeFeishuCardAction({
+      event: {
+        operator: { open_id: "u123" },
+        context: { chat_id: "chat1" },
+        action: {
+          tag: "form",
+          name: "survey",
+          value: {},
+          options: [],
+          form_value: {},
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      kind: "legacy",
+      text: JSON.stringify({
+        action: "form",
+        name: "survey",
+        options: [],
+        form_value: {},
+      }),
+      payload: {
+        action: "form",
+        name: "survey",
+        options: [],
+        form_value: {},
+      },
+    });
+  });
+
   it("rejects malformed structured payloads", () => {
     const result = decodeFeishuCardAction({
       event: {

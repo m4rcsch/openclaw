@@ -207,6 +207,10 @@ function readFeishuIdentityField(
   return firstString(value[field]);
 }
 
+function hasOwnDefinedField(record: Record<string, unknown>, field: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, field) && record[field] !== undefined;
+}
+
 function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEvent | null {
   if (!isRecord(value)) {
     return null;
@@ -254,6 +258,11 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
     action: {
       value: actionValue,
       tag,
+      ...(typeof action.name === "string" ? { name: action.name } : {}),
+      ...(hasOwnDefinedField(action, "input_value") ? { input_value: action.input_value } : {}),
+      ...(hasOwnDefinedField(action, "option") ? { option: action.option } : {}),
+      ...(hasOwnDefinedField(action, "options") ? { options: action.options } : {}),
+      ...(hasOwnDefinedField(action, "form_value") ? { form_value: action.form_value } : {}),
     },
     ...(openMessageId ? { open_message_id: openMessageId } : {}),
     context: {

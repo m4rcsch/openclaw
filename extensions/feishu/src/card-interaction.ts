@@ -29,20 +29,38 @@ type FeishuCardActionEventLike = {
   };
   action: {
     value: unknown;
+    tag?: string;
+    name?: unknown;
+    input_value?: unknown;
+    option?: unknown;
+    options?: unknown;
+    form_value?: unknown;
   };
   context: {
     chat_id?: string;
   };
 };
 
+export type FeishuCardActionMetadataPayload = {
+  action: string;
+  value?: unknown;
+  name?: string;
+  input_value?: unknown;
+  option?: unknown;
+  options?: unknown;
+  form_value?: unknown;
+};
+
 type DecodedFeishuCardAction =
   | {
       kind: "structured";
       envelope: FeishuCardInteractionEnvelope;
+      payload?: FeishuCardActionMetadataPayload;
     }
   | {
       kind: "legacy";
       text: string;
+      payload?: FeishuCardActionMetadataPayload;
     }
   | {
       kind: "invalid";
@@ -63,6 +81,17 @@ function isMetadataValue(value: unknown): value is string | number | boolean | n
   );
 }
 
+function hasOwnDefinedField(record: Record<string, unknown>, field: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, field) && record[field] !== undefined;
+}
+
+function hasCommandText(actionValue: unknown): boolean {
+  return (
+    isRecord(actionValue) &&
+    (typeof actionValue.text === "string" || typeof actionValue.command === "string")
+  );
+}
+
 export function createFeishuCardInteractionEnvelope(
   envelope: Omit<FeishuCardInteractionEnvelope, "oc">,
 ): FeishuCardInteractionEnvelope {
@@ -74,6 +103,10 @@ export function createFeishuCardInteractionEnvelope(
 
 export function buildFeishuCardActionTextFallback(event: FeishuCardActionEventLike): string {
   const actionValue = event.action.value;
+  const payload = buildFeishuCardActionMetadataPayload(event);
+  if (payload && !hasCommandText(actionValue)) {
+    return JSON.stringify(payload);
+  }
   if (isRecord(actionValue)) {
     if (typeof actionValue.text === "string") {
       return actionValue.text;
@@ -86,16 +119,44 @@ export function buildFeishuCardActionTextFallback(event: FeishuCardActionEventLi
   return String(actionValue);
 }
 
+export function buildFeishuCardActionMetadataPayload(
+  event: FeishuCardActionEventLike,
+): FeishuCardActionMetadataPayload | undefined {
+  const action = event.action as Record<string, unknown>;
+  const hasMetadata =
+    hasOwnDefinedField(action, "form_value") ||
+    hasOwnDefinedField(action, "input_value") ||
+    hasOwnDefinedField(action, "option") ||
+    hasOwnDefinedField(action, "options");
+  if (!hasMetadata) {
+    return undefined;
+  }
+
+  return {
+    action: typeof action.tag === "string" && action.tag ? action.tag : "card_action",
+    ...(isRecord(action.value) && Object.keys(action.value).length > 0
+      ? { value: action.value }
+      : {}),
+    ...(typeof action.name === "string" ? { name: action.name } : {}),
+    ...(hasOwnDefinedField(action, "input_value") ? { input_value: action.input_value } : {}),
+    ...(hasOwnDefinedField(action, "option") ? { option: action.option } : {}),
+    ...(hasOwnDefinedField(action, "options") ? { options: action.options } : {}),
+    ...(hasOwnDefinedField(action, "form_value") ? { form_value: action.form_value } : {}),
+  };
+}
+
 export function decodeFeishuCardAction(params: {
   event: FeishuCardActionEventLike;
   now?: number;
 }): DecodedFeishuCardAction {
   const { event, now = Date.now() } = params;
   const actionValue = event.action.value;
+  const payload = buildFeishuCardActionMetadataPayload(event);
   if (!isRecord(actionValue) || actionValue.oc !== FEISHU_CARD_INTERACTION_VERSION) {
     return {
       kind: "legacy",
       text: buildFeishuCardActionTextFallback(event),
+      ...(payload ? { payload } : {}),
     };
   }
 
@@ -156,5 +217,6 @@ export function decodeFeishuCardAction(params: {
   return {
     kind: "structured",
     envelope: actionValue as FeishuCardInteractionEnvelope,
+    ...(payload ? { payload } : {}),
   };
 }
