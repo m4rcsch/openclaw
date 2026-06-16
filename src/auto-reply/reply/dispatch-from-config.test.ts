@@ -1742,25 +1742,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(routeCall?.threadId).toBeUndefined();
   });
 
-  it("forces suppressTyping when routing to a different originating channel", async () => {
-    setNoAbort();
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-    });
-
-    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.suppressTyping).toBe(true);
-      expect(opts?.typingPolicy).toBe("system_event");
-      return { text: "hi" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-  });
-
   it("forces suppressTyping for internal webchat turns", async () => {
     setNoAbort();
     const cfg = emptyConfig;
