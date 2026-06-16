@@ -69,7 +69,11 @@ import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import * as sharedClientModule from "./shared-client.js";
 import { createCodexTestModel } from "./test-support.js";
-import { buildTurnStartParams, startOrResumeThread } from "./thread-lifecycle.js";
+import {
+  buildTurnStartParams,
+  codexDynamicToolsFingerprint,
+  startOrResumeThread,
+} from "./thread-lifecycle.js";
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
@@ -296,7 +300,7 @@ function createCodexToolBridgeForTest(
     tools,
     registeredTools,
     signal,
-    directToolNames: testing.shouldForceMessageTool(params) ? ["message"] : [],
+    directToolNames: testing.resolveCodexDynamicToolDirectNames(params),
   });
 }
 
@@ -1667,9 +1671,26 @@ describe("runCodexAppServerAttempt", () => {
       ignoreRuntimePlan: true,
     });
     const bridge = createCodexToolBridgeForTest(params, availableTools, registeredTools);
+    const normalParams = createParams(sessionFile, workspaceDir);
+    normalParams.disableTools = false;
+    normalParams.sourceReplyDeliveryMode = "message_tool_only";
+    normalParams.runtimePlan = createCodexRuntimePlanFixture();
+    const normalTools = await buildDynamicToolsForTest(normalParams, workspaceDir);
+    const normalRegisteredTools = await buildDynamicToolsForTest(normalParams, workspaceDir, {
+      ignoreDisableMessageTool: true,
+      ignoreRuntimePlan: true,
+    });
+    const normalBridge = createCodexToolBridgeForTest(
+      normalParams,
+      normalTools,
+      normalRegisteredTools,
+    );
 
     expect(bridge.availableSpecs.map((tool) => tool.name)).not.toContain("message");
     expect(bridge.specs.map((tool) => tool.name)).toContain("message");
+    expect(codexDynamicToolsFingerprint(bridge.specs)).toBe(
+      codexDynamicToolsFingerprint(normalBridge.specs),
+    );
     await expect(
       bridge.handleToolCall({
         threadId: "thread-1",

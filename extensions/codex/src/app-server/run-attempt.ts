@@ -789,7 +789,7 @@ export async function runCodexAppServerAttempt(
     registeredTools,
     signal: runAbortController.signal,
     loading: resolveCodexDynamicToolsLoadingForModel(pluginConfig, params.modelId),
-    directToolNames: shouldForceMessageTool(params) ? ["message"] : [],
+    directToolNames: resolveCodexDynamicToolDirectNames(params),
     hookContext: {
       agentId: sessionAgentId,
       config: params.config,
@@ -3184,6 +3184,13 @@ function handleApprovalRequest(params: {
   });
 }
 
+function resolveCodexDynamicToolDirectNames(params: EmbeddedRunAttemptParams): string[] {
+  if (params.sourceReplyDeliveryMode !== "message_tool_only") {
+    return [];
+  }
+  return ["message"];
+}
+
 export const testing = {
   buildCodexNativeHookRelayId,
   buildDeveloperInstructions,
@@ -3197,6 +3204,7 @@ export const testing = {
   resolveOpenClawCodingToolsSessionKeys,
   shouldEnableCodexAppServerNativeToolSurface,
   shouldForceMessageTool,
+  resolveCodexDynamicToolDirectNames,
   hasPendingDynamicToolTerminalDiagnostic,
   toTranscriptToolResultForTests: toTranscriptToolResult,
   withCodexStartupTimeout,
