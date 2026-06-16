@@ -963,7 +963,7 @@ describe("web auto-reply connection", () => {
 
   it("normalizes legacy flat listener messages and rejects partial nested input", async () => {
     const capture = createWebListenerFactoryCapture();
-    const { reply } = createWebInboundDeliverySpies();
+    const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();
 
     await monitorWebChannel(false, capture.listenerFactory as never, false, async () => ({
       text: "ok",
@@ -981,6 +981,26 @@ describe("web auto-reply connection", () => {
     await onMessage(msg);
 
     expect(reply).toHaveBeenCalledWith("ok", undefined);
+    await expect(
+      onMessage({
+        event: { id: "canonical-no-admission" },
+        payload: { body: "canonical" },
+        platform: {
+          chatJid: "+3",
+          recipientJid: "+4",
+          sendComposing,
+          reply,
+          sendMedia,
+        },
+        from: "+3",
+        conversationId: "+3",
+        accountId: "default",
+        chatType: "direct",
+      }),
+    ).rejects.toThrow(/missing admission facts/);
+
+    expect(reply).toHaveBeenCalledWith("ok", undefined);
+    expect(reply).toHaveBeenCalledTimes(1);
     await expect(
       onMessage({
         ...msg,
