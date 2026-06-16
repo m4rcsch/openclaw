@@ -20,9 +20,11 @@ import {
   listSessionEntries as listFileSessionEntries,
   loadSessionStore,
   patchSessionEntry as patchFileSessionEntry,
+  purgeDeletedAgentSessionEntries as purgeFileDeletedAgentSessionEntries,
   readSessionUpdatedAt as readFileSessionUpdatedAt,
   resolveSessionStoreEntry,
   updateSessionStoreEntry as updateFileSessionStoreEntry,
+  type DeletedAgentSessionEntryPurgeParams,
   type SessionArchivedTranscriptCleanupRule,
   type SessionEntryLifecycleMutationResult,
   type SessionEntryLifecycleRemoval,
@@ -178,6 +180,7 @@ export type SessionEntryPatchContext = {
 
 export type { SessionLifecycleArtifactCleanupParams, SessionLifecycleArtifactCleanupResult };
 export type {
+  DeletedAgentSessionEntryPurgeParams,
   SessionArchivedTranscriptCleanupRule,
   SessionEntryLifecycleMutationResult,
   SessionEntryLifecycleRemoval,
@@ -333,6 +336,13 @@ export async function applySessionEntryLifecycleMutation(params: {
   captureArtifactCleanupError?: boolean;
 }): Promise<SessionEntryLifecycleMutationResult> {
   return await applyFileSessionEntryLifecycleMutation(params);
+}
+
+/** Purges session entries owned by a deleted agent at the storage boundary. */
+export async function purgeDeletedAgentSessionEntries(
+  params: DeletedAgentSessionEntryPurgeParams,
+): Promise<SessionEntryLifecycleMutationResult> {
+  return await purgeFileDeletedAgentSessionEntries(params);
 }
 
 /** Reads parsed transcript records from an explicit or derived transcript target. */

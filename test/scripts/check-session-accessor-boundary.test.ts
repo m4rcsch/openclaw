@@ -52,7 +52,7 @@ describe("session accessor boundary guard", () => {
     );
   });
 
-  it("ratchets only the auto-reply files migrated to session accessor writes", () => {
+  it("ratchets only files migrated to session accessor writes", () => {
     expect(migratedSessionAccessorWriteFiles).toEqual(
       new Set([
         "src/agents/command/attempt-execution.shared.ts",
@@ -76,6 +76,7 @@ describe("session accessor boundary guard", () => {
         "src/auto-reply/reply/session-reset-model.ts",
         "src/auto-reply/reply/session-updates.ts",
         "src/auto-reply/reply/session-usage.ts",
+        "src/config/sessions/cleanup-service.ts",
       ]),
     );
   });

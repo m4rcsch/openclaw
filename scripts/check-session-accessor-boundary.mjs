@@ -90,6 +90,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/session-reset-model.ts",
   "src/auto-reply/reply/session-updates.ts",
   "src/auto-reply/reply/session-usage.ts",
+  "src/config/sessions/cleanup-service.ts",
 ]);
 
 export const migratedSessionLifecycleCleanupFiles = new Set([
@@ -238,7 +239,11 @@ export async function main() {
     "src/gateway",
     "src/infra",
   ]);
-  const writeSourceRoots = resolveSourceRoots(repoRoot, ["src/agents", "src/auto-reply"]);
+  const writeSourceRoots = resolveSourceRoots(repoRoot, [
+    "src/agents",
+    "src/auto-reply",
+    "src/config/sessions",
+  ]);
   const readViolations = await collectFileViolations({
     repoRoot,
     sourceRoots: readSourceRoots,
