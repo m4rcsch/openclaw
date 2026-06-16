@@ -89,9 +89,16 @@ describe("ci workflow guards", () => {
     for (const jobName of ["preflight", "security-fast", "skills-python"]) {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
-      expect(checkoutStep.run, jobName).toContain(
-        'timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE"',
-      );
+      if (jobName === "skills-python") {
+        expect(checkoutStep.run, jobName).toContain(
+          'timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE"',
+        );
+      } else {
+        expect(checkoutStep.run, jobName).toContain(
+          'timeout --signal=TERM --kill-after=10s "${fetch_timeout_seconds}s" git -C "$GITHUB_WORKSPACE"',
+        );
+        expect(checkoutStep.run, jobName).toContain("local fetch_timeout_seconds=90");
+      }
       expect(checkoutStep.run, jobName).toContain("for attempt in 1 2 3");
       expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
       expect(checkoutStep.run, jobName).not.toContain("if timeout --signal=TERM");
