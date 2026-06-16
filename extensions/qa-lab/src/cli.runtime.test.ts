@@ -339,6 +339,8 @@ describe("qa cli runtime", () => {
       repoRoot: process.cwd(),
       outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "scenario-test"),
       transportId: "qa-channel",
+      channelDriver: undefined,
+      channelDriverSelection: undefined,
       primaryModel: "mock-openai/gpt-5.5",
       alternateModel: undefined,
       fastMode: undefined,
@@ -441,6 +443,7 @@ describe("qa cli runtime", () => {
         repoRoot: path.resolve("/tmp/openclaw-repo"),
         outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa-e2e/smoke-ci"),
         transportId: "qa-channel",
+        channelDriver: "crabline",
         providerMode: "mock-openai",
         fastMode: true,
         concurrency: 2,
@@ -498,7 +501,7 @@ describe("qa cli runtime", () => {
     }
   });
 
-  it("keeps non-Crabline profile channel drivers out of SDK driver selection", async () => {
+  it("passes non-Crabline profile channel drivers as declarative suite metadata", async () => {
     await runQaProfileCommand({
       repoRoot: "/tmp/openclaw-repo",
       profile: "release",
@@ -508,6 +511,7 @@ describe("qa cli runtime", () => {
     });
 
     const suiteArgs = mockFirstObjectArg(runQaSuite);
+    expect(suiteArgs.channelDriver).toBe("live");
     expect(suiteArgs.channelDriverSelection).toBeUndefined();
   });
 
@@ -550,6 +554,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/frontier"),
       transportId: "qa-channel",
+      channelDriver: undefined,
+      channelDriverSelection: undefined,
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.5",
       alternateModel: "anthropic/claude-sonnet-4-6",
@@ -572,6 +578,7 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/multipass-telegram"),
       transportId: "qa-channel",
+      channelDriver: "crabline",
       channelDriverSelection: {
         capabilityMatrixPath: "crabline-channel-capability-matrix.json",
         channel: "telegram",
@@ -612,6 +619,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: undefined,
       transportId: "qa-channel",
+      channelDriver: undefined,
+      channelDriverSelection: undefined,
       providerMode: "mock-openai",
       primaryModel: undefined,
       alternateModel: undefined,
@@ -633,6 +642,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: undefined,
       transportId: "qa-channel",
+      channelDriver: undefined,
+      channelDriverSelection: undefined,
       providerMode: "mock-openai",
       primaryModel: undefined,
       alternateModel: undefined,
@@ -683,6 +694,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: undefined,
       transportId: "qa-channel",
+      channelDriver: undefined,
+      channelDriverSelection: undefined,
       providerMode: "mock-openai",
       primaryModel: undefined,
       alternateModel: undefined,
@@ -2078,6 +2091,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: undefined,
       transportId: "qa-channel",
+      channelDriver: undefined,
+      channelDriverSelection: undefined,
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
       alternateModel: "anthropic/claude-opus-4-8",
