@@ -559,6 +559,7 @@ beforeEach(() => {
   getRuntimeConfig.mockReset();
   getRuntimeConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
   sessionStoreEntries.value = {};
+  rmSync(sessionStorePath, { force: true });
   rmSync(`${sessionStorePath}.telegram-messages.json`, { force: true });
   clearTelegramDispatchDedupeFilesForTest();
   loadSessionStoreMock.mockReset();
