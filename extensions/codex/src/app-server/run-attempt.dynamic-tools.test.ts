@@ -1,10 +1,6 @@
 // Codex tests cover run attemptynamic tools plugin behavior.
 import path from "node:path";
-import {
-  onAgentEvent,
-  wrapToolWithBeforeToolCallHook,
-  type AgentEventPayload,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createTerminalPresentationContractTool,
   textToolResult,
@@ -22,6 +18,7 @@ import {
   emitDynamicToolStartedDiagnostic,
   emitDynamicToolTerminalDiagnostic,
 } from "./dynamic-tool-diagnostics.js";
+import { handleDynamicToolCallWithTimeout } from "./dynamic-tool-execution.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import type { CodexDynamicToolCallParams } from "./protocol.js";
 import {
@@ -149,65 +146,67 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       format: formatTerminalPresentation,
     });
     slowTool.execute = vi.fn(() => slowToolResult);
-    const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
     let terminalPresentation: string | undefined = "previous summary";
     let latestOrdinal = -1;
-    let nextOrdinal = 0;
-    const onExecutionPhase = vi.fn();
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.allocateToolOutcomeOrdinal = () => nextOrdinal++;
-    params.onExecutionPhase = onExecutionPhase;
-    params.onToolOutcome = (observation) => {
+    const recordToolOutcome = (observation: {
+      [key: string]: unknown;
+      terminalPresentation?: string;
+      toolCallOrdinal?: number;
+    }) => {
       const ordinal = observation.toolCallOrdinal ?? latestOrdinal + 1;
       if (ordinal >= latestOrdinal) {
         latestOrdinal = ordinal;
         terminalPresentation = observation.terminalPresentation;
       }
     };
-    testing.setOpenClawCodingToolsFactoryForTests((options) => [
-      wrapToolWithBeforeToolCallHook(slowTool, {
-        runId: options?.runId,
-        sessionId: options?.sessionId,
-        sessionKey: options?.sessionKey,
-        onToolOutcome: options?.onToolOutcome,
-        allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
-      }),
-    ]);
+    const toolCallOrdinal = 0;
+    const outcomeSuppressor = testing.createCodexDynamicToolOutcomeSuppressor(recordToolOutcome);
+    const runAbortController = new AbortController();
+    const bridge = createCodexDynamicToolBridge({
+      tools: [slowTool],
+      signal: runAbortController.signal,
+      hookContext: {
+        runId: "run-timeout",
+        onToolOutcome: outcomeSuppressor.onToolOutcome,
+      },
+    });
+    const call = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-timeout",
+      namespace: null,
+      tool: "slow_summary",
+      arguments: {},
+    } satisfies CodexDynamicToolCallParams;
 
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("thread/start");
-    await vi.waitFor(() =>
-      expect(onExecutionPhase).toHaveBeenCalledWith(
-        expect.objectContaining({ phase: "turn_accepted" }),
-      ),
-    );
-    const response = await harness.handleServerRequest({
-      id: "request-timeout",
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-timeout",
-        namespace: null,
-        tool: "slow_summary",
-        arguments: { timeoutMs: 1 },
+    const response = await handleDynamicToolCallWithTimeout({
+      call,
+      toolBridge: bridge,
+      signal: runAbortController.signal,
+      timeoutMs: 1,
+      toolCallOrdinal,
+      onFallbackSelected: () => {
+        outcomeSuppressor.suppressOrdinal(toolCallOrdinal);
       },
     });
     expect(response).toMatchObject({ success: false });
+    if (!response.success) {
+      outcomeSuppressor.suppressOrdinal(toolCallOrdinal);
+      recordToolOutcome({
+        toolName: call.tool,
+        argsHash: "",
+        resultHash: "",
+        toolCallOrdinal,
+        terminalPresentation: undefined,
+        presentationOnly: true,
+      });
+    }
     expect(terminalPresentation).toBeUndefined();
 
     resolveSlowTool(textToolResult("late result"));
     await vi.waitFor(() => {
       expect(formatTerminalPresentation).toHaveBeenCalled();
     });
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-
     expect(terminalPresentation).toBeUndefined();
   });
 

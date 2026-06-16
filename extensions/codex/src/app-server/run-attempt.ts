@@ -701,18 +701,8 @@ export async function runCodexAppServerAttempt(
   }
   let yieldDetected = false;
   const toolOutcomeOrdinals = new Map<string, number>();
-  const suppressedDynamicToolOutcomeOrdinals = new Set<number>();
-  const onCodexToolOutcome = params.onToolOutcome
-    ? (observation: Parameters<NonNullable<typeof params.onToolOutcome>>[0]) => {
-        if (
-          observation.toolCallOrdinal !== undefined &&
-          suppressedDynamicToolOutcomeOrdinals.has(observation.toolCallOrdinal)
-        ) {
-          return;
-        }
-        params.onToolOutcome?.(observation);
-      }
-    : undefined;
+  const codexToolOutcomeSuppressor = createCodexDynamicToolOutcomeSuppressor(params.onToolOutcome);
+  const onCodexToolOutcome = codexToolOutcomeSuppressor.onToolOutcome;
   const baseAllocateToolOutcomeOrdinal = params.allocateToolOutcomeOrdinal;
   const allocateCodexToolOutcomeOrdinal = baseAllocateToolOutcomeOrdinal
     ? (toolCallId?: string): number => {
@@ -1980,9 +1970,7 @@ export async function runCodexAppServerAttempt(
           toolCallOrdinal,
           onAgentToolResult: params.onAgentToolResult,
           onFallbackSelected: () => {
-            if (toolCallOrdinal !== undefined) {
-              suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
-            }
+            codexToolOutcomeSuppressor.suppressOrdinal(toolCallOrdinal);
           },
           onTimeout: () => {
             trajectoryRecorder?.recordEvent("tool.timeout", {
@@ -1998,7 +1986,7 @@ export async function runCodexAppServerAttempt(
         if (!protocolResponse.success && toolCallOrdinal !== undefined) {
           // The underlying tool may ignore cancellation and finish after the
           // timeout response. Its late presentation must not replace this failure.
-          suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
+          codexToolOutcomeSuppressor.suppressOrdinal(toolCallOrdinal);
           params.onToolOutcome?.({
             toolName: call.tool,
             argsHash: "",
@@ -3080,6 +3068,33 @@ function waitForCodexNotificationDispatchTurn(): Promise<void> {
   });
 }
 
+function createCodexDynamicToolOutcomeSuppressor(
+  onToolOutcome: EmbeddedRunAttemptParams["onToolOutcome"] | undefined,
+): {
+  onToolOutcome: EmbeddedRunAttemptParams["onToolOutcome"] | undefined;
+  suppressOrdinal: (toolCallOrdinal: number | undefined) => void;
+} {
+  const suppressedDynamicToolOutcomeOrdinals = new Set<number>();
+  return {
+    onToolOutcome: onToolOutcome
+      ? (observation) => {
+          if (
+            observation.toolCallOrdinal !== undefined &&
+            suppressedDynamicToolOutcomeOrdinals.has(observation.toolCallOrdinal)
+          ) {
+            return;
+          }
+          onToolOutcome(observation);
+        }
+      : undefined,
+    suppressOrdinal: (toolCallOrdinal) => {
+      if (toolCallOrdinal !== undefined) {
+        suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
+      }
+    },
+  };
+}
+
 function buildCodexAppServerTimeoutDiagnostics(params: {
   idleMs?: number;
   timeoutMs?: number;
@@ -3179,6 +3194,7 @@ export const testing = {
   resolveOpenClawCodingToolsSessionKeys,
   shouldEnableCodexAppServerNativeToolSurface,
   shouldForceMessageTool,
+  createCodexDynamicToolOutcomeSuppressor,
   hasPendingDynamicToolTerminalDiagnostic,
   toTranscriptToolResultForTests: toTranscriptToolResult,
   withCodexStartupTimeout,
