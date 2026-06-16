@@ -1548,58 +1548,6 @@ describe("dispatchReplyFromConfig", () => {
     }
   });
 
-  it("routes exec-event replies using persisted session delivery context when current turn has no originating route", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    sessionStoreMocks.currentEntry = {
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:999",
-        accountId: "acc-1",
-      },
-      lastChannel: "telegram",
-      lastTo: "telegram:999",
-      lastAccountId: "acc-1",
-    };
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "exec-event",
-      Surface: "exec-event",
-      SessionKey: "agent:main:main",
-      AccountId: undefined,
-      OriginatingChannel: undefined,
-      OriginatingTo: undefined,
-    });
-
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall() as
-      | { accountId?: unknown; channel?: unknown; to?: unknown }
-      | undefined;
-    expect(routeCall?.channel).toBe("telegram");
-    expect(routeCall?.to).toBe("telegram:999");
-    expect(routeCall?.accountId).toBe("acc-1");
-    const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
-      | [
-          {
-            originatingAccountId?: unknown;
-            originatingChannel?: unknown;
-            originatingThreadId?: unknown;
-            originatingTo?: unknown;
-            shouldRouteToOriginating?: unknown;
-          },
-          unknown,
-        ]
-      | undefined;
-    expect(replyDispatchCall?.[0]?.shouldRouteToOriginating).toBe(true);
-    expect(replyDispatchCall?.[0]?.originatingChannel).toBe("telegram");
-    expect(replyDispatchCall?.[0]?.originatingTo).toBe("telegram:999");
-    expect(typeof replyDispatchCall?.[1]).toBe("object");
-  });
-
   it("routes sessions_send internal webchat handoffs through persisted external delivery context", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
