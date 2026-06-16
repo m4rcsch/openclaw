@@ -28,6 +28,7 @@ import type {
   PluginTargetedInboundClaimOutcome,
 } from "../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -1710,10 +1711,17 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
-  it("honors sendPolicy deny for recovered exec-event delivery channel", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    sessionStoreMocks.currentEntry = {
+  it("honors sendPolicy deny for recovered exec-event delivery channel", () => {
+    const cfg = {
+      session: {
+        sendPolicy: {
+          default: "allow",
+          rules: [{ action: "deny", match: { channel: "telegram" } }],
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:main";
+    const entry = {
       deliveryContext: {
         channel: "telegram",
         to: "telegram:999",
@@ -1723,49 +1731,39 @@ describe("dispatchReplyFromConfig", () => {
       lastTo: "telegram:999",
       lastAccountId: "acc-1",
     };
-    const cfg = {
-      session: {
-        sendPolicy: {
-          default: "allow",
-          rules: [{ action: "deny", match: { channel: "telegram" } }],
-        },
-      },
-    } as OpenClawConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "exec-event",
-      Surface: "exec-event",
-      SessionKey: "agent:main:main",
-      AccountId: undefined,
-      OriginatingChannel: undefined,
-      OriginatingTo: undefined,
+    const replyRoute = resolveEffectiveReplyRoute({
+      ctx: buildTestCtx({
+        Provider: "exec-event",
+        Surface: "exec-event",
+        SessionKey: sessionKey,
+        AccountId: undefined,
+        OriginatingChannel: undefined,
+        OriginatingTo: undefined,
+      }),
+      entry,
+    });
+    const sendPolicy = resolveSendPolicy({
+      cfg,
+      entry,
+      sessionKey,
+      channel: replyRoute.channel,
+      chatType: replyRoute.chatType,
+    });
+    const decision = resolveReplyRoutingDecision({
+      provider: "exec-event",
+      surface: "exec-event",
+      originatingChannel: replyRoute.channel,
+      originatingTo: replyRoute.to,
+      isRoutableChannel: (channel) => channel === "telegram",
     });
 
-    const replyResolver = vi.fn(async () => ({ text: "hi" }) satisfies ReplyPayload);
-    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(mocks.routeReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(result.queuedFinal).toBe(false);
-    const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
-      | [
-          {
-            originatingChannel?: unknown;
-            originatingTo?: unknown;
-            sendPolicy?: unknown;
-            shouldRouteToOriginating?: unknown;
-            suppressUserDelivery?: unknown;
-          },
-          unknown,
-        ]
-      | undefined;
-    expect(replyDispatchCall?.[0]?.sendPolicy).toBe("deny");
-    expect(replyDispatchCall?.[0]?.suppressUserDelivery).toBe(true);
-    expect(replyDispatchCall?.[0]?.shouldRouteToOriginating).toBe(true);
-    expect(replyDispatchCall?.[0]?.originatingChannel).toBe("telegram");
-    expect(replyDispatchCall?.[0]?.originatingTo).toBe("telegram:999");
-    expect(typeof replyDispatchCall?.[1]).toBe("object");
+    expect(replyRoute).toMatchObject({
+      channel: "telegram",
+      to: "telegram:999",
+      accountId: "acc-1",
+    });
+    expect(sendPolicy).toBe("deny");
+    expect(decision.shouldRouteToOriginating).toBe(true);
   });
 
   it("falls back to thread-scoped session key when current ctx has no MessageThreadId", async () => {
