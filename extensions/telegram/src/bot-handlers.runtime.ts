@@ -2781,7 +2781,9 @@ export const registerTelegramHandlers = ({
           const safePage = Math.max(1, Math.min(page, totalPages));
 
           // Resolve current model from session (prefer overrides)
-          const currentModel = sessionState.model;
+          const currentModel =
+            sessionState.model ??
+            `${modelData.resolvedDefault.provider}/${modelData.resolvedDefault.model}`;
 
           const buttons = buildModelsKeyboard({
             provider,

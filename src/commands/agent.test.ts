@@ -1311,10 +1311,12 @@ describe("agentCommand", () => {
         },
       });
       mockConfig(home, store);
+      const sendMessageTelegram = vi.fn(async () => undefined);
 
       await agentCommand(
         { message: "hi", to: sessionKey, deliver: true, channel: "telegram" },
         runtime,
+        { sendMessageTelegram },
       );
 
       const deliveryCall = vi.mocked(deliverAgentCommandResult).mock.calls.at(-1)?.[0] as
@@ -1322,6 +1324,7 @@ describe("agentCommand", () => {
         | undefined;
       expect(deliveryCall?.opts?.to).toBeUndefined();
       expect(deliveryCall?.sessionEntry?.lastTo).toBe("+1555");
+      expect(sendMessageTelegram).not.toHaveBeenCalled();
     });
   });
 

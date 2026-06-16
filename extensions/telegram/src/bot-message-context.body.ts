@@ -220,9 +220,10 @@ export async function resolveTelegramInboundBody(params: {
   const primaryMedia = resolveTelegramPrimaryMedia(msg);
   let placeholder = primaryMedia?.placeholder ?? "";
   const cachedStickerDescription = allMedia[0]?.stickerMetadata?.cachedDescription;
-  const stickerSupportsVision = msg.sticker
-    ? await resolveStickerVisionSupport({ cfg, agentId: routeAgentId })
-    : false;
+  const stickerSupportsVision =
+    cachedStickerDescription && allMedia.length === 0 && msg.sticker
+      ? await resolveStickerVisionSupport({ cfg, agentId: routeAgentId })
+      : false;
   const stickerCacheHit = Boolean(cachedStickerDescription) && !stickerSupportsVision;
   if (stickerCacheHit) {
     const emoji = allMedia[0]?.stickerMetadata?.emoji;

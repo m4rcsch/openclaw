@@ -1209,7 +1209,7 @@ describe("dispatchReplyFromConfig", () => {
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
-    const cfg = emptyConfig;
+    const cfg = { ...emptyConfig, diagnostics: { enabled: false } } satisfies OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "slack",
@@ -1352,6 +1352,7 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     mocks.routeReply.mockClear();
+    const cfg = { ...emptyConfig, diagnostics: { enabled: false } } satisfies OpenClawConfig;
 
     const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({
@@ -1361,7 +1362,7 @@ describe("dispatchReplyFromConfig", () => {
         OriginatingTo: "telegram:999",
         SessionKey: "agent:main:telegram:group:999",
       }),
-      cfg: emptyConfig,
+      cfg,
       dispatcher,
       replyResolver: async () =>
         setReplyPayloadMetadata(

@@ -1,4 +1,5 @@
 // Telegram tests cover polling session plugin behavior.
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1724,41 +1725,48 @@ describe("TelegramPollingSession", () => {
 
   it("keeps claims owned by another live process blocked", async () => {
     await withTempSpool(async (tempDir) => {
+      const otherProcess = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+        stdio: "ignore",
+      });
       const interruptedUpdate = topicUpdate(42, 10, "active topic 10 turn");
-      await writeSpooledTestUpdates(tempDir, [
-        interruptedUpdate,
-        topicUpdate(43, 10, "later topic 10 turn"),
-      ]);
-      const interrupted = (await listTelegramSpooledUpdates({ spoolDir: tempDir })).find(
-        (update) => update.updateId === 42,
-      );
-      if (!interrupted) {
-        throw new Error("Expected interrupted update");
-      }
-      const claimed = await claimTelegramSpooledUpdate(interrupted);
-      if (!claimed) {
-        throw new Error("Expected claimed update");
-      }
-      await adoptClaimOwner({
-        spoolDir: tempDir,
-        updateId: 42,
-        ownerId: `${process.pid}:other-process`,
-        claimedAt: Date.now(),
-      });
+      try {
+        await writeSpooledTestUpdates(tempDir, [
+          interruptedUpdate,
+          topicUpdate(43, 10, "later topic 10 turn"),
+        ]);
+        const interrupted = (await listTelegramSpooledUpdates({ spoolDir: tempDir })).find(
+          (update) => update.updateId === 42,
+        );
+        if (!interrupted) {
+          throw new Error("Expected interrupted update");
+        }
+        const claimed = await claimTelegramSpooledUpdate(interrupted);
+        if (!claimed) {
+          throw new Error("Expected claimed update");
+        }
+        await adoptClaimOwner({
+          spoolDir: tempDir,
+          updateId: 42,
+          ownerId: `${otherProcess.pid}:other-process`,
+          claimedAt: Date.now(),
+        });
 
-      const recovered = await recoverStaleTelegramSpooledUpdateClaims({
-        spoolDir: tempDir,
-        staleMs: 0,
-        shouldRecover: (claim) => !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim),
-      });
+        const recovered = await recoverStaleTelegramSpooledUpdateClaims({
+          spoolDir: tempDir,
+          staleMs: 0,
+          shouldRecover: (claim) => !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim),
+        });
 
-      expect(recovered).toBe(0);
-      expect(await pendingUpdateIds(tempDir)).toEqual([43]);
-      expect(
-        (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map(
-          (claim) => claim.updateId,
-        ),
-      ).toEqual([42]);
+        expect(recovered).toBe(0);
+        expect(await pendingUpdateIds(tempDir)).toEqual([43]);
+        expect(
+          (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map(
+            (claim) => claim.updateId,
+          ),
+        ).toEqual([42]);
+      } finally {
+        otherProcess.kill();
+      }
     });
   });
 
