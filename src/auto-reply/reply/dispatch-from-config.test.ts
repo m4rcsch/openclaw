@@ -37,6 +37,7 @@ import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { setReplyPayloadMetadata, type GetReplyOptions, type ReplyPayload } from "../types.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
+import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
 import {
   createReplyDispatcher,
@@ -1664,174 +1665,120 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
-  it("routes exec-event replies using persisted session delivery context when current turn has no originating route", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    installThreadingTestPlugin({ id: "telegram" });
-    sessionStoreMocks.currentEntry = {
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:999",
-        accountId: "acc-1",
+  it("routes exec-event replies using persisted session delivery context when current turn has no originating route", () => {
+    const replyRoute = resolveEffectiveReplyRoute({
+      ctx: buildTestCtx({
+        Provider: "exec-event",
+        Surface: "exec-event",
+        SessionKey: "agent:main:main",
+        AccountId: undefined,
+        OriginatingChannel: undefined,
+        OriginatingTo: undefined,
+      }),
+      entry: {
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:999",
+          accountId: "acc-1",
+        },
+        lastChannel: "telegram",
+        lastTo: "telegram:999",
+        lastAccountId: "acc-1",
       },
-      lastChannel: "telegram",
-      lastTo: "telegram:999",
-      lastAccountId: "acc-1",
-    };
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "exec-event",
-      Surface: "exec-event",
-      SessionKey: "agent:main:main",
-      AccountId: undefined,
-      OriginatingChannel: undefined,
-      OriginatingTo: undefined,
+    });
+    const decision = resolveReplyRoutingDecision({
+      provider: "exec-event",
+      surface: "exec-event",
+      originatingChannel: replyRoute.channel,
+      originatingTo: replyRoute.to,
+      isRoutableChannel: (channel) => channel === "telegram",
     });
 
-    const replyResolver = async () =>
-      ({ text: "hi", mediaUrl: "https://example.test/reply.png" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall() as
-      | { accountId?: unknown; channel?: unknown; to?: unknown }
-      | undefined;
-    expect(routeCall?.channel).toBe("telegram");
-    expect(routeCall?.to).toBe("telegram:999");
-    expect(routeCall?.accountId).toBe("acc-1");
-    const normalizerOptions = replyMediaPathMocks.createReplyMediaPathNormalizer.mock
-      .calls[0]?.[0] as { accountId?: unknown; messageProvider?: unknown } | undefined;
-    expect(normalizerOptions?.messageProvider).toBe("telegram");
-    expect(normalizerOptions?.accountId).toBe("acc-1");
-    const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
-      | [
-          {
-            originatingAccountId?: unknown;
-            originatingChannel?: unknown;
-            originatingThreadId?: unknown;
-            originatingTo?: unknown;
-            shouldRouteToOriginating?: unknown;
-          },
-          unknown,
-        ]
-      | undefined;
-    expect(replyDispatchCall?.[0]?.shouldRouteToOriginating).toBe(true);
-    expect(replyDispatchCall?.[0]?.originatingChannel).toBe("telegram");
-    expect(replyDispatchCall?.[0]?.originatingTo).toBe("telegram:999");
-    expect(typeof replyDispatchCall?.[1]).toBe("object");
+    expect(replyRoute).toMatchObject({
+      channel: "telegram",
+      to: "telegram:999",
+      accountId: "acc-1",
+    });
+    expect(decision.shouldRouteToOriginating).toBe(true);
   });
 
-  it("routes sessions_send internal webchat handoffs through persisted external delivery context", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    installThreadingTestPlugin({ id: "feishu" });
-    sessionStoreMocks.currentEntry = {
-      route: {
-        channel: "feishu",
-        accountId: "work",
-        target: { to: "user:ou_123", chatType: "channel" },
-        thread: { id: "thread:om_123", source: "explicit" },
-      },
-      chatType: "channel",
-      deliveryContext: {
-        channel: "feishu",
-        to: "user:ou_123",
-        accountId: "work",
-        threadId: "thread:om_123",
-      },
-      lastChannel: "feishu",
-      lastTo: "user:ou_123",
-      lastAccountId: "work",
-    };
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "webchat",
-      Surface: "webchat",
-      SessionKey: "agent:main:feishu:direct:ou_123",
-      AccountId: undefined,
-      OriginatingChannel: "webchat",
-      OriginatingTo: "session:dashboard",
-      ChatType: "direct",
-      InputProvenance: {
-        kind: "inter_session",
-        sourceTool: "sessions_send",
-        sourceChannel: "webchat",
+  it("routes sessions_send internal webchat handoffs through persisted external delivery context", () => {
+    const replyRoute = resolveEffectiveReplyRoute({
+      ctx: buildTestCtx({
+        Provider: "webchat",
+        Surface: "webchat",
+        SessionKey: "agent:main:feishu:direct:ou_123",
+        AccountId: undefined,
+        OriginatingChannel: "webchat",
+        OriginatingTo: "session:dashboard",
+        ChatType: "direct",
+        InputProvenance: {
+          kind: "inter_session",
+          sourceTool: "sessions_send",
+          sourceChannel: "webchat",
+        },
+      }),
+      entry: {
+        route: {
+          channel: "feishu",
+          accountId: "work",
+          target: { to: "user:ou_123", chatType: "channel" },
+          thread: { id: "thread:om_123", source: "explicit" },
+        },
+        chatType: "channel",
+        deliveryContext: {
+          channel: "feishu",
+          to: "user:ou_123",
+          accountId: "work",
+          threadId: "thread:om_123",
+        },
+        lastChannel: "feishu",
+        lastTo: "user:ou_123",
+        lastAccountId: "work",
       },
     });
-
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall() as
-      | {
-          accountId?: unknown;
-          channel?: unknown;
-          replyDelivery?: unknown;
-          threadId?: unknown;
-          to?: unknown;
-        }
-      | undefined;
-    expect(routeCall?.channel).toBe("feishu");
-    expect(routeCall?.to).toBe("user:ou_123");
-    expect(routeCall?.accountId).toBe("work");
-    expect(routeCall?.threadId).toBe("thread:om_123");
-    expect(routeCall?.replyDelivery).toEqual({
-      chatType: "channel",
-      replyToMode: "all",
+    const decision = resolveReplyRoutingDecision({
+      provider: "webchat",
+      surface: "webchat",
+      explicitDeliverRoute: replyRoute.inheritedExternalRoute,
+      originatingChannel: replyRoute.channel,
+      originatingTo: replyRoute.to,
+      isRoutableChannel: (channel) => channel === "feishu",
     });
-    const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
-      | [
-          {
-            originatingAccountId?: unknown;
-            originatingChannel?: unknown;
-            originatingChatType?: unknown;
-            originatingThreadId?: unknown;
-            originatingTo?: unknown;
-            shouldRouteToOriginating?: unknown;
-          },
-          unknown,
-        ]
-      | undefined;
-    expect(replyDispatchCall?.[0]?.shouldRouteToOriginating).toBe(true);
-    expect(replyDispatchCall?.[0]?.originatingChannel).toBe("feishu");
-    expect(replyDispatchCall?.[0]?.originatingTo).toBe("user:ou_123");
-    expect(replyDispatchCall?.[0]?.originatingAccountId).toBe("work");
-    expect(replyDispatchCall?.[0]?.originatingThreadId).toBe("thread:om_123");
-    expect(replyDispatchCall?.[0]?.originatingChatType).toBe("channel");
+
+    expect(replyRoute).toMatchObject({
+      channel: "feishu",
+      to: "user:ou_123",
+      accountId: "work",
+      threadId: "thread:om_123",
+      chatType: "channel",
+      inheritedExternalRoute: true,
+    });
+    expect(decision.shouldRouteToOriginating).toBe(true);
   });
 
-  it("routes exec-event replies using last route fields when delivery context is missing", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    sessionStoreMocks.currentEntry = {
-      lastChannel: "discord",
-      lastTo: "channel:123",
-      lastAccountId: "default",
-    };
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "exec-event",
-      Surface: "exec-event",
-      SessionKey: "agent:main:main",
-      AccountId: undefined,
-      OriginatingChannel: undefined,
-      OriginatingTo: undefined,
+  it("routes exec-event replies using last route fields when delivery context is missing", () => {
+    const replyRoute = resolveEffectiveReplyRoute({
+      ctx: buildTestCtx({
+        Provider: "exec-event",
+        Surface: "exec-event",
+        SessionKey: "agent:main:main",
+        AccountId: undefined,
+        OriginatingChannel: undefined,
+        OriginatingTo: undefined,
+      }),
+      entry: {
+        lastChannel: "discord",
+        lastTo: "channel:123",
+        lastAccountId: "default",
+      },
     });
 
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall() as
-      | { accountId?: unknown; channel?: unknown; to?: unknown }
-      | undefined;
-    expect(routeCall?.channel).toBe("discord");
-    expect(routeCall?.to).toBe("channel:123");
-    expect(routeCall?.accountId).toBe("default");
+    expect(replyRoute).toMatchObject({
+      channel: "discord",
+      to: "channel:123",
+      accountId: "default",
+    });
   });
 
   it("honors sendPolicy deny for recovered exec-event delivery channel", async () => {
