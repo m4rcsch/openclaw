@@ -268,7 +268,6 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     });
     try {
       await harness.waitForMethod("thread/start");
-      await harness.waitForMethod("turn/start");
 
       const startParams = harness.requests.find((request) => request.method === "thread/start")
         ?.params as
@@ -302,12 +301,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       expect(runError).toBeUndefined();
     } finally {
       harness.close();
-      await Promise.race([
-        run,
-        new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        }),
-      ]);
+      await run;
     }
   });
 
