@@ -76,7 +76,10 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       result: textToolResult("unused"),
       format: () => "slow dynamic summary",
     });
-    slowTool.execute = vi.fn(() => slowToolResult);
+    slowTool.execute = vi.fn(() => {
+      resolveSlowToolStarted();
+      return slowToolResult;
+    });
     const laterTool = createTerminalPresentationContractTool({
       name: "fast_summary",
       result: textToolResult("fast result"),
@@ -95,16 +98,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       }
     };
     const bridge = createCodexDynamicToolBridge({
-      tools: [
-        {
-          ...slowTool,
-          execute: vi.fn((...args) => {
-            resolveSlowToolStarted();
-            return slowTool.execute(...args);
-          }),
-        },
-        laterTool,
-      ],
+      tools: [slowTool, laterTool],
       signal: new AbortController().signal,
       hookContext: {
         runId: "run-order",
