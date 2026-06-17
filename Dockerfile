@@ -321,6 +321,9 @@ RUN install -d -m 0755 -o node -g node /home/node/.config && \
 
 ENV NODE_ENV=production
 
+# m4rcsch: install clawhub global npm package for skill hub support
+RUN npm install -g clawhub
+
 # Security hardening: Run as non-root user
 # The node:24-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
