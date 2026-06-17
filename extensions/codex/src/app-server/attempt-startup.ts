@@ -324,6 +324,7 @@ export async function startCodexAttemptThread(params: {
                 pluginThreadConfig: pluginThreadConfigRequired
                   ? {
                       enabled: true,
+                      codexPluginsEnabled: resolvedPluginPolicy?.enabled === true,
                       inputFingerprint: pluginThreadConfigInputFingerprint,
                       enabledPluginConfigKeys,
                       build: () =>

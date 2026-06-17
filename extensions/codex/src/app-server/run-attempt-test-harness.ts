@@ -412,10 +412,10 @@ export function createStartedThreadHarness(
   }, options);
 }
 
-export function createResumeHarness() {
+export function createResumeHarness(threadId = "thread-existing") {
   return createAppServerHarness(async (method) => {
     if (method === "thread/resume") {
-      return threadStartResult("thread-existing");
+      return threadStartResult(threadId);
     }
     if (method === "turn/start") {
       return turnStartResult();

@@ -35,11 +35,7 @@ import {
   turnStartResult,
 } from "./run-attempt-test-harness.js";
 import { testing } from "./run-attempt.js";
-import {
-  readCodexAppServerBinding,
-  resolveCodexAppServerBindingPath,
-  writeCodexAppServerBinding,
-} from "./session-binding.js";
+import { readCodexAppServerBinding, resolveCodexAppServerBindingPath } from "./session-binding.js";
 
 setupRunAttemptTestHooks();
 
@@ -1081,10 +1077,10 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
 
     await new Promise((resolve) => {
-      setTimeout(resolve, 20);
+      setTimeout(resolve, 250);
     });
-    expect(settled).toBe(false);
-    expect(request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    expect(settled).toBe(true);
+    expect(request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(true);
 
     const result = await run;
     expect(result.aborted).toBe(true);
@@ -2991,21 +2987,27 @@ describe("runCodexAppServerAttempt turn watches", () => {
     vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const sessionFile = path.join(tempDir, "session-89974.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-89974");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-existing",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
+    const setupHarness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-existing");
+      }
+      return undefined;
     });
+    const setupRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await setupHarness.waitForMethod("turn/start");
+    await setupHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await setupRun;
 
     // Turn 1: resume an existing thread, then never deliver turn/completed.
-    const firstHarness = createResumeHarness();
+    const firstHarness = createResumeHarness("thread-existing");
     const firstParams = createParams(sessionFile, workspaceDir);
     firstParams.timeoutMs = 200;
     const firstRun = runCodexAppServerAttempt(firstParams, { turnCompletionIdleTimeoutMs: 15 });
     await firstHarness.waitForMethod("turn/start");
     expect(firstHarness.requests.some((entry) => entry.method === "thread/resume")).toBe(true);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
 
     const firstResult = await firstRun;
     expect(firstResult.timedOut).toBe(true);

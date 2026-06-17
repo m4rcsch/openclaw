@@ -23,6 +23,7 @@ let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
 type RunCodexAppServerAttemptOptions = NonNullable<
   Parameters<typeof runCodexAppServerAttemptImpl>[1]
 >;
+type CodexAppServerBindingInput = Parameters<typeof writeCodexAppServerBinding>[1];
 
 function setCodexAppServerClientFactoryForTest(factory: CodexAppServerClientFactory): void {
   codexAppServerClientFactoryForTest = factory;
@@ -240,6 +241,46 @@ function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEng
     ...overrides,
   };
   return engine;
+}
+
+async function resolveCurrentBindingDefaults(): Promise<Partial<CodexAppServerBindingInput>> {
+  const metadataSessionFile = path.join(tempDir, `binding-metadata-${Date.now()}.jsonl`);
+  const metadataWorkspaceDir = path.join(tempDir, "binding-metadata-workspace");
+  const harness = createStartedThreadHarness(async (method) => {
+    if (method === "thread/start") {
+      return threadStartResult("thread-metadata");
+    }
+    return undefined;
+  });
+  const run = runCodexAppServerAttempt(createParams(metadataSessionFile, metadataWorkspaceDir));
+  await harness.waitForMethod("turn/start");
+  await harness.completeTurn("completed", "thread-metadata");
+  await run;
+  const binding = await readCodexAppServerBinding(metadataSessionFile);
+  if (!binding) {
+    throw new Error("expected current Codex app-server binding metadata");
+  }
+  return {
+    dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
+    dynamicToolsContainDeferred: binding.dynamicToolsContainDeferred,
+    webSearchThreadConfigFingerprint: binding.webSearchThreadConfigFingerprint,
+    userMcpServersFingerprint: binding.userMcpServersFingerprint,
+    mcpServersFingerprint: binding.mcpServersFingerprint,
+    pluginAppsFingerprint: binding.pluginAppsFingerprint,
+    pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
+    pluginAppPolicyContext: binding.pluginAppPolicyContext,
+    environmentSelectionFingerprint: binding.environmentSelectionFingerprint,
+  };
+}
+
+async function writeCurrentCodexAppServerBinding(
+  sessionFile: string,
+  binding: CodexAppServerBindingInput,
+): Promise<void> {
+  await writeCodexAppServerBinding(sessionFile, {
+    ...(await resolveCurrentBindingDefaults()),
+    ...binding,
+  });
 }
 
 type MockCallReader = { mock: { calls: unknown[][] } };
@@ -577,7 +618,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
-    await writeCodexAppServerBinding(sessionFile, {
+    await writeCurrentCodexAppServerBinding(sessionFile, {
       threadId: "thread-bootstrapped",
       cwd: workspaceDir,
       dynamicToolsFingerprint: "[]",
@@ -662,7 +703,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
-    await writeCodexAppServerBinding(sessionFile, {
+    await writeCurrentCodexAppServerBinding(sessionFile, {
       threadId: "thread-bootstrapped",
       cwd: workspaceDir,
       dynamicToolsFingerprint: "[]",
@@ -750,7 +791,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     sessionManager.appendMessage(
       assistantMessage("previous stale-bootstrap answer", Date.now() + 1) as never,
     );
-    await writeCodexAppServerBinding(sessionFile, {
+    await writeCurrentCodexAppServerBinding(sessionFile, {
       threadId: "thread-stale-bootstrap",
       cwd: workspaceDir,
       dynamicToolsFingerprint: "[]",
@@ -836,7 +877,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const sessionManager = SessionManager.open(sessionFile);
     sessionManager.appendMessage(userMessage("previous per-turn request", 10) as never);
     sessionManager.appendMessage(assistantMessage("previous per-turn answer", 11) as never);
-    await writeCodexAppServerBinding(sessionFile, {
+    await writeCurrentCodexAppServerBinding(sessionFile, {
       threadId: "thread-per-turn-context",
       cwd: workspaceDir,
       dynamicToolsFingerprint: "[]",
@@ -880,7 +921,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    await writeCodexAppServerBinding(sessionFile, {
+    await writeCurrentCodexAppServerBinding(sessionFile, {
       threadId: "thread-old",
       cwd: workspaceDir,
       dynamicToolsFingerprint: "[]",
@@ -967,7 +1008,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("reprojects thread-bootstrap context when context-engine policy changes", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    await writeCodexAppServerBinding(sessionFile, {
+    await writeCurrentCodexAppServerBinding(sessionFile, {
       threadId: "thread-old",
       cwd: workspaceDir,
       dynamicToolsFingerprint: "[]",
@@ -1049,7 +1090,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     try {
-      await writeCodexAppServerBinding(sessionFile, {
+      await writeCurrentCodexAppServerBinding(sessionFile, {
         threadId: "thread-old",
         cwd: workspaceDir,
         dynamicToolsFingerprint: "[]",
@@ -1144,7 +1185,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("starts a fresh Codex thread when thread-bootstrap projection falls back to per-turn projection", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    await writeCodexAppServerBinding(sessionFile, {
+    await writeCurrentCodexAppServerBinding(sessionFile, {
       threadId: "thread-old",
       cwd: workspaceDir,
       dynamicToolsFingerprint: "[]",
@@ -1214,7 +1255,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     SessionManager.open(sessionFile).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
-    await writeCodexAppServerBinding(sessionFile, {
+    await writeCurrentCodexAppServerBinding(sessionFile, {
       threadId: "thread-old",
       cwd: workspaceDir,
       dynamicToolsFingerprint: "[]",
@@ -1316,7 +1357,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     SessionManager.open(sessionFile).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
-    await writeCodexAppServerBinding(sessionFile, {
+    await writeCurrentCodexAppServerBinding(sessionFile, {
       threadId: "thread-old",
       cwd: workspaceDir,
       dynamicToolsFingerprint: "[]",
@@ -1352,7 +1393,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         return threadStartResult("thread-old");
       }
       if (method === "turn/start" && request.threadId === "thread-old") {
-        await writeCodexAppServerBinding(sessionFile, {
+        await writeCurrentCodexAppServerBinding(sessionFile, {
           threadId: "thread-new",
           cwd: workspaceDir,
           dynamicToolsFingerprint: "[]",
@@ -1388,7 +1429,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     SessionManager.open(sessionFile).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
-    await writeCodexAppServerBinding(sessionFile, {
+    await writeCurrentCodexAppServerBinding(sessionFile, {
       threadId: "thread-old",
       cwd: workspaceDir,
       dynamicToolsFingerprint: "[]",
@@ -1546,7 +1587,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     SessionManager.open(sessionFile).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
-    await writeCodexAppServerBinding(sessionFile, {
+    await writeCurrentCodexAppServerBinding(sessionFile, {
       threadId: "thread-old",
       cwd: workspaceDir,
       dynamicToolsFingerprint: "[]",
