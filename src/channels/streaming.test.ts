@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildChannelProgressDraftLine } from "./streaming.js";
 
 describe("buildChannelProgressDraftLine", () => {
-  it("omits generic completed status from successful command output with title", () => {
+  it("shows completed status with successful command output title", () => {
     const line = buildChannelProgressDraftLine(
       {
         event: "command-output",
@@ -18,13 +18,13 @@ describe("buildChannelProgressDraftLine", () => {
     expect(line).toMatchObject({
       kind: "command-output",
       id: "exec-1",
-      text: "🛠️ pwd",
+      text: "🛠️ completed; pwd",
       detail: "pwd",
       status: "completed",
     });
   });
 
-  it("uses the tool label when successful command output has no title", () => {
+  it("uses completed status when successful command output has no title", () => {
     const line = buildChannelProgressDraftLine({
       event: "command-output",
       phase: "end",
@@ -34,10 +34,10 @@ describe("buildChannelProgressDraftLine", () => {
 
     expect(line).toMatchObject({
       kind: "command-output",
-      text: "🛠️ Exec",
+      text: "🛠️ completed",
       status: "completed",
     });
-    expect(line?.detail).toBeUndefined();
+    expect(line?.detail).toBe("completed");
   });
 
   it("keeps command status and title in raw command progress lines", () => {
