@@ -19,6 +19,7 @@ import MarkdownIt from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { i18n, t } from "../i18n/index.ts";
+import { encodeCodeBlockCopyPayload } from "./chat/code-block-copy-payload.ts";
 import { truncateText } from "./format.ts";
 import { inferBasePathFromPathname, normalizeBasePath, tabFromPath } from "./navigation.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
@@ -746,7 +747,7 @@ function renderCodeBlock(
     return codeBlock;
   }
   const langLabel = lang ? `<span class="code-block-lang">${escapeHtml(lang)}</span>` : "";
-  const attrSafe = escapeHtml(text);
+  const attrSafe = escapeHtml(encodeCodeBlockCopyPayload(text));
   const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
   const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
 

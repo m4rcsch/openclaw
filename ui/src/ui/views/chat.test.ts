@@ -17,6 +17,7 @@ import {
 import { renderChatQueue } from "../chat/chat-queue.ts";
 import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
 import { renderWelcomeState } from "../chat/chat-welcome.ts";
+import { encodeCodeBlockCopyPayload } from "../chat/code-block-copy-payload.ts";
 import { renderChatSessionSelect } from "../chat/session-controls.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../types.ts";
@@ -610,6 +611,43 @@ describe("chat compaction divider", () => {
     button!.click();
 
     expect(onOpenSessionCheckpoints).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("chat code-block copy", () => {
+  it("copies decoded QR block-art boundary spaces from the delegated button handler", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const container = renderChatView();
+    const thread = requireElement(container, ".chat-thread", "chat thread");
+    const payload = "  ▀▀▀▀  \n  ▄▄▄▄  ";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "code-block-copy";
+    button.dataset.code = encodeCodeBlockCopyPayload(payload);
+    thread.appendChild(button);
+
+    button.click();
+    await Promise.resolve();
+
+    expect(writeText).toHaveBeenCalledWith(payload);
+  });
+
+  it("keeps legacy raw data-code payloads copyable", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const container = renderChatView();
+    const thread = requireElement(container, ".chat-thread", "chat thread");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "code-block-copy";
+    button.dataset.code = "legacy text";
+    thread.appendChild(button);
+
+    button.click();
+    await Promise.resolve();
+
+    expect(writeText).toHaveBeenCalledWith("legacy text");
   });
 });
 
