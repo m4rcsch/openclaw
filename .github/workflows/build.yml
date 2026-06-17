@@ -1,0 +1,77 @@
+name: Weekly openclaw build
+
+on:
+  schedule:
+    - cron: '0 4 * * 1'  # Monday 04:00 UTC
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check upstream for changes
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          UPSTREAM_SHA=$(gh api repos/openclaw/openclaw/commits/main --jq '.sha')
+          LATEST_TAG=$(git tag --sort=-v:refname | grep '^v' | head -1 || true)
+          if [ -n "$LATEST_TAG" ]; then
+            LAST_SHA=$(git for-each-ref --format='%(contents)' "refs/tags/$LATEST_TAG" | grep '^upstream:' | awk '{print $2}' || true)
+          else
+            LAST_SHA=""
+          fi
+          echo "upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
+          if [ "$UPSTREAM_SHA" = "$LAST_SHA" ]; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No upstream changes since $LATEST_TAG — skipping build"
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Upstream changed: ${LAST_SHA:-<none>} → $UPSTREAM_SHA"
+          fi
+
+      - name: Sync from upstream
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/openclaw/openclaw.git
+          git fetch upstream main
+          git merge upstream/main --no-edit
+          git push origin main
+
+      - uses: docker/login-action@v3
+        if: steps.check.outputs.changed == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate date tag
+        if: steps.check.outputs.changed == 'true'
+        id: tag
+        run: echo "value=v$(date -u +%Y.%m.%d)" >> $GITHUB_OUTPUT
+
+      - uses: docker/build-push-action@v5
+        if: steps.check.outputs.changed == 'true'
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/m4rcsch/openclaw:${{ steps.tag.outputs.value }}
+
+      - name: Create annotated release tag
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.tag.outputs.value }}" \
+            -m "upstream: ${{ steps.check.outputs.upstream_sha }}"
+          git push origin "${{ steps.tag.outputs.value }}"
