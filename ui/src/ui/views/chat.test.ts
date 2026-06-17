@@ -161,6 +161,7 @@ vi.mock("../chat/grouped-render.ts", () => ({
 }));
 
 vi.mock("../markdown.ts", () => ({
+  isMarkdownBlockArtText: () => false,
   toSanitizedMarkdownHtml: (value: string) => value,
 }));
 
