@@ -740,14 +740,14 @@ function renderCodeBlock(
   text: string,
   lang: string,
   env: unknown,
-  options: { blockArt?: boolean } = {},
+  options: { blockArt?: boolean; copyText?: string } = {},
 ): string {
   const codeBlock = renderCodeElement(text, lang, options);
   if (!shouldRenderCodeBlockCopy(env)) {
     return codeBlock;
   }
   const langLabel = lang ? `<span class="code-block-lang">${escapeHtml(lang)}</span>` : "";
-  const attrSafe = escapeHtml(encodeCodeBlockCopyPayload(text));
+  const attrSafe = escapeHtml(encodeCodeBlockCopyPayload(options.copyText ?? text));
   const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
   const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
 
@@ -765,6 +765,10 @@ function renderCodeBlock(
   }
 
   return `<div class="code-block-wrapper">${header}${codeBlock}</div>`;
+}
+
+function codeBlockCopyTextFromMarkdownToken(content: string): string {
+  return content.endsWith("\n") ? content.slice(0, -1) : content;
 }
 
 export const md = new MarkdownIt({
@@ -1038,12 +1042,17 @@ md.renderer.rules.fence = (tokens, idx, _options, env) => {
   // token.info contains the full fence info string (e.g., "json title=foo");
   // extract only the first whitespace-separated token as the language.
   const lang = token.info.trim().split(/\s+/)[0] || "";
-  return renderCodeBlock(token.content, lang, env);
+  return renderCodeBlock(token.content, lang, env, {
+    copyText: codeBlockCopyTextFromMarkdownToken(token.content),
+  });
 };
 
 // Override indented code blocks (code_block) with the same treatment as fence
 md.renderer.rules.code_block = (tokens, idx, _options, env) => {
-  return renderCodeBlock(tokens[idx].content, "", env);
+  const content = tokens[idx].content;
+  return renderCodeBlock(content, "", env, {
+    copyText: codeBlockCopyTextFromMarkdownToken(content),
+  });
 };
 
 export function toSanitizedMarkdownHtml(
