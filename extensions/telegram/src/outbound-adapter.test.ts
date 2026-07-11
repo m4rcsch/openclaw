@@ -5,15 +5,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageTelegramMock = vi.fn();
 const pinMessageTelegramMock = vi.fn();
+const reactMessageTelegramMock = vi.fn();
 const sendPollTelegramMock = vi.fn();
 
 vi.mock("./send.js", () => ({
   pinMessageTelegram: (...args: unknown[]) => pinMessageTelegramMock(...args),
+  reactMessageTelegram: (...args: unknown[]) => reactMessageTelegramMock(...args),
   sendPollTelegram: (...args: unknown[]) => sendPollTelegramMock(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegramMock(...args),
 }));
 
 import { telegramOutbound } from "./outbound-adapter.js";
+import { resolveTelegramPromptContextDeliverySignature } from "./prompt-context-projection.js";
 
 type MockWithCalls = {
   mock: { calls: unknown[][] };
@@ -60,6 +63,7 @@ function callOptionsFromEnd(
 describe("telegramOutbound", () => {
   beforeEach(() => {
     pinMessageTelegramMock.mockReset();
+    reactMessageTelegramMock.mockReset();
     sendPollTelegramMock.mockReset();
     sendMessageTelegramMock.mockReset();
   });
@@ -111,6 +115,13 @@ describe("telegramOutbound", () => {
           telegram: {
             quoteText: "quoted",
             buttons: [[{ text: "Allow Once", callback_data: "/approve abc allow-once" }]],
+            promptContextSource: {
+              transcriptMessageId: "assistant-media",
+              deliverySignature: resolveTelegramPromptContextDeliverySignature({
+                text: "Approval required",
+                mediaUrls: ["https://example.com/1.jpg", "https://example.com/2.jpg"],
+              }),
+            },
           },
         },
       },
@@ -127,12 +138,73 @@ describe("telegramOutbound", () => {
     expect(firstOptions.buttons).toEqual([
       [{ text: "Allow Once", callback_data: "/approve abc allow-once" }],
     ]);
+    expect(firstOptions.promptContextProjectionPlan).toMatchObject({
+      cursor: {
+        source: {
+          transcriptMessageId: "assistant-media",
+        },
+        nextPartIndex: 0,
+        complete: true,
+      },
+      finalPart: false,
+    });
     const secondOptions = callOptionsAt(sendMessageTelegramMock, 1, "12345", "");
     expect(secondOptions.mediaUrl).toBe("https://example.com/2.jpg");
     expect(secondOptions.mediaLocalRoots).toEqual(["/tmp/media"]);
     expect(secondOptions.quoteText).toBe("quoted");
     expect(secondOptions.buttons).toBeUndefined();
+    expect(secondOptions.promptContextProjectionPlan).toMatchObject({
+      cursor: {
+        source: {
+          transcriptMessageId: "assistant-media",
+        },
+        nextPartIndex: 0,
+        complete: true,
+      },
+      finalPart: true,
+    });
+    expect((firstOptions.promptContextProjectionPlan as { cursor: unknown }).cursor).toBe(
+      (secondOptions.promptContextProjectionPlan as { cursor: unknown }).cursor,
+    );
     expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "12345" });
+  });
+
+  it.each([
+    ["trailing empty", ["https://example.com/only.jpg", ""]],
+    ["leading empty", ["", "https://example.com/only.jpg"]],
+    ["whitespace", ["   ", " https://example.com/only.jpg "]],
+  ])("normalizes $0 media entries before first/final decisions", async (_name, mediaUrls) => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-only", chatId: "12345" });
+    const buttons = [[{ text: "Open", callback_data: "open" }]];
+
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "caption",
+      payload: {
+        text: "caption",
+        mediaUrls,
+        channelData: {
+          telegram: {
+            buttons,
+            promptContextSource: {
+              transcriptMessageId: "assistant-media",
+              deliverySignature: resolveTelegramPromptContextDeliverySignature({
+                text: "caption",
+                mediaUrls,
+              }),
+            },
+          },
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "caption");
+    expect(sendMessageTelegramMock).toHaveBeenCalledTimes(1);
+    expect(options.mediaUrl).toBe("https://example.com/only.jpg");
+    expect(options.buttons).toEqual(buttons);
+    expect(options.promptContextProjectionPlan).toMatchObject({ finalPart: true });
   });
 
   it("uses interactive button labels as fallback text for button-only payloads", async () => {
@@ -155,7 +227,216 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-buttons", chatId: "12345" });
   });
 
-  it("uses presentation button labels as fallback text for presentation-only payloads", async () => {
+  it("forwards prompt-context sources on durable payload sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-final", chatId: "12345" });
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        text: "Final answer",
+        channelData: {
+          telegram: {
+            promptContextSource: {
+              transcriptMessageId: "assistant-final",
+              deliverySignature: resolveTelegramPromptContextDeliverySignature({
+                text: "Final answer",
+              }),
+            },
+          },
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Final answer");
+    expect(options.promptContextProjectionPlan).toMatchObject({
+      cursor: {
+        source: {
+          transcriptMessageId: "assistant-final",
+        },
+        nextPartIndex: 0,
+        complete: true,
+      },
+      finalPart: true,
+    });
+    expect(result).toEqual({ channel: "telegram", messageId: "tg-final", chatId: "12345" });
+  });
+
+  it("detaches stale prompt-context provenance after a durable hook rewrite", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-final", chatId: "12345" });
+
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        text: "Hook-rewritten answer",
+        channelData: {
+          telegram: {
+            promptContextSource: {
+              transcriptMessageId: "assistant-final",
+              deliverySignature: resolveTelegramPromptContextDeliverySignature({
+                text: "Original answer",
+              }),
+            },
+          },
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Hook-rewritten answer");
+    expect(options.promptContextProjectionPlan).toBeUndefined();
+  });
+
+  it("applies reaction-only payloads without sending empty Telegram text", async () => {
+    reactMessageTelegramMock.mockResolvedValueOnce({ ok: true });
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      replyToId: "777",
+      payload: {
+        channelData: {
+          telegram: {
+            reaction: { emoji: "🔥" },
+          },
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(reactMessageTelegramMock).toHaveBeenCalledWith("12345", 777, "🔥", {
+      cfg: {},
+      verbose: false,
+      accountId: undefined,
+      gatewayClientScopes: undefined,
+    });
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "telegram", messageId: "777", chatId: "12345" });
+  });
+
+  it("applies reaction payloads before sending visible text", async () => {
+    reactMessageTelegramMock.mockResolvedValueOnce({ ok: true });
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-text", chatId: "12345" });
+
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      accountId: "ops",
+      replyToId: "777",
+      payload: {
+        text: "Done",
+        channelData: {
+          telegram: {
+            reaction: { emoji: "✅" },
+          },
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(reactMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      777,
+      "✅",
+      expect.objectContaining({ accountId: "ops" }),
+    );
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "Done",
+      expect.objectContaining({ accountId: "ops", replyToMessageId: 777 }),
+    );
+    expect(reactMessageTelegramMock.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMessageTelegramMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("rejects text plus reaction payloads without a reply target", async () => {
+    await expect(
+      telegramOutbound.sendPayload!({
+        cfg: {} as never,
+        to: "12345",
+        text: "",
+        payload: {
+          text: "Done",
+          channelData: { telegram: { reaction: { emoji: "🔥" } } },
+        },
+        deps: { sendTelegram: sendMessageTelegramMock },
+      }),
+    ).rejects.toThrow("Telegram reaction requires a reply target");
+
+    expect(reactMessageTelegramMock).not.toHaveBeenCalled();
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects text plus reaction payloads when Telegram refuses the emoji", async () => {
+    reactMessageTelegramMock.mockResolvedValueOnce({
+      ok: false,
+      warning: "Reaction unavailable: not-supported",
+    });
+
+    await expect(
+      telegramOutbound.sendPayload!({
+        cfg: {} as never,
+        to: "12345",
+        text: "",
+        replyToId: "777",
+        payload: {
+          text: "Done",
+          channelData: { telegram: { reaction: { emoji: "not-supported" } } },
+        },
+        deps: { sendTelegram: sendMessageTelegramMock },
+      }),
+    ).rejects.toThrow("Reaction unavailable: not-supported");
+
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects reaction-only payloads without a reply target", async () => {
+    await expect(
+      telegramOutbound.sendPayload!({
+        cfg: {} as never,
+        to: "12345",
+        text: "",
+        payload: {
+          channelData: { telegram: { reaction: { emoji: "🔥" } } },
+        },
+        deps: { sendTelegram: sendMessageTelegramMock },
+      }),
+    ).rejects.toThrow("Telegram reaction requires a reply target");
+
+    expect(reactMessageTelegramMock).not.toHaveBeenCalled();
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects reaction-only payloads when Telegram refuses the emoji", async () => {
+    reactMessageTelegramMock.mockResolvedValueOnce({
+      ok: false,
+      warning: "Reaction unavailable: not-supported",
+    });
+
+    await expect(
+      telegramOutbound.sendPayload!({
+        cfg: {} as never,
+        to: "12345",
+        text: "",
+        replyToId: "777",
+        payload: {
+          channelData: { telegram: { reaction: { emoji: "not-supported" } } },
+        },
+        deps: { sendTelegram: sendMessageTelegramMock },
+      }),
+    ).rejects.toThrow("Reaction unavailable: not-supported");
+
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps presentation-only controls deliverable without duplicating labels", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({
       messageId: "tg-presentation-buttons",
       chatId: "12345",
@@ -173,7 +454,7 @@ describe("telegramOutbound", () => {
       deps: { sendTelegram: sendMessageTelegramMock },
     });
 
-    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "- Retry");
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Choose an option.");
     expect(options.buttons).toEqual([[{ text: "Retry", callback_data: "cmd:retry" }]]);
     expect(result).toEqual({
       channel: "telegram",
@@ -209,12 +490,7 @@ describe("telegramOutbound", () => {
       deps: { sendTelegram: sendMessageTelegramMock },
     });
 
-    const options = callOptionsAt(
-      sendMessageTelegramMock,
-      0,
-      "12345",
-      "Open app:\n\n- Launch: https://example.com/app",
-    );
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Open app:");
     expect(options.buttons).toEqual([
       [{ text: "Launch", web_app: { url: "https://example.com/app" } }],
     ]);
@@ -244,6 +520,7 @@ describe("telegramOutbound", () => {
     expect((rendered?.channelData?.telegram as { buttons?: unknown })?.buttons).toEqual([
       [{ text: "Native", callback_data: "native" }],
     ]);
+    expect(rendered?.text).toBe("Use native buttons:\n\n- Generic");
   });
 
   it("preserves legacy interactive buttons when rendering mixed presentation payloads", async () => {
@@ -272,9 +549,9 @@ describe("telegramOutbound", () => {
       throw new Error("expected rendered Telegram presentation");
     }
 
-    expect((rendered.channelData?.telegram as { buttons?: unknown } | undefined)?.buttons).toBe(
-      undefined,
-    );
+    expect((rendered.channelData?.telegram as { buttons?: unknown } | undefined)?.buttons).toEqual([
+      [{ text: "Legacy", callback_data: "legacy" }],
+    ]);
 
     await telegramOutbound.sendPayload!({
       cfg: {} as never,
@@ -328,12 +605,7 @@ describe("telegramOutbound", () => {
       deps: { sendTelegram: sendMessageTelegramMock },
     });
 
-    const options = callOptionsAt(
-      sendMessageTelegramMock,
-      0,
-      "12345",
-      "Approve?\n\n- Allow Always",
-    );
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Approve?");
     expect(options.buttons).toEqual([
       [{ text: "Allow Always", callback_data: `/approve ${approvalId} always` }],
     ]);

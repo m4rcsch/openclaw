@@ -4,7 +4,6 @@ import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtim
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
@@ -13,6 +12,7 @@ import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
+import { resolveFeishuCardTemplate } from "./native-card.js";
 import { parsePostContent } from "./post.js";
 import {
   assertFeishuMessageApiSuccess,
@@ -22,25 +22,11 @@ import {
 import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
 
+export { resolveFeishuCardTemplate };
+
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 const INTERACTIVE_CARD_FALLBACK_TEXT = "[Interactive Card]";
 const POST_FALLBACK_TEXT = "[Rich text message]";
-const FEISHU_CARD_TEMPLATES = new Set([
-  "blue",
-  "green",
-  "red",
-  "orange",
-  "purple",
-  "indigo",
-  "wathet",
-  "turquoise",
-  "yellow",
-  "grey",
-  "carmine",
-  "violet",
-  "lime",
-]);
-
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
     return true;
@@ -439,7 +425,7 @@ export async function getMessageFeishu(params: {
   }
 }
 
-export type FeishuThreadMessageInfo = {
+type FeishuThreadMessageInfo = {
   messageId: string;
   senderId?: string;
   senderType?: string;
@@ -532,7 +518,7 @@ export async function listFeishuThreadMessages(params: {
   return results;
 }
 
-export type SendFeishuMessageParams = {
+type SendFeishuMessageParams = {
   cfg: ClawdbotConfig;
   to: string;
   text: string;
@@ -632,7 +618,7 @@ export async function sendMessageFeishu(
   });
 }
 
-export type SendFeishuCardParams = {
+type SendFeishuCardParams = {
   cfg: ClawdbotConfig;
   to: string;
   card: Record<string, unknown>;
@@ -715,31 +701,6 @@ export async function editMessageFeishu(params: {
   return { messageId, contentType: "post" };
 }
 
-export async function updateCardFeishu(params: {
-  cfg: ClawdbotConfig;
-  messageId: string;
-  card: Record<string, unknown>;
-  accountId?: string;
-}): Promise<void> {
-  const { cfg, messageId, card, accountId } = params;
-  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
-  const content = JSON.stringify(card);
-
-  const response = await client.im.message.patch({
-    path: { message_id: messageId },
-    data: { content },
-  });
-
-  if (response.code !== 0) {
-    throw new Error(`Feishu card update failed: ${response.msg || `code ${response.code}`}`);
-  }
-}
-
 /**
  * Build a Feishu interactive card with markdown content.
  * Cards render markdown properly (code blocks, tables, links, etc.)
@@ -769,14 +730,6 @@ export type CardHeaderConfig = {
   /** Feishu header color template (blue, green, red, orange, purple, grey, etc.). Defaults to "blue". */
   template?: string;
 };
-
-export function resolveFeishuCardTemplate(template?: string): string | undefined {
-  const normalized = normalizeOptionalLowercaseString(template);
-  if (!normalized || !FEISHU_CARD_TEMPLATES.has(normalized)) {
-    return undefined;
-  }
-  return normalized;
-}
 
 /**
  * Build a Feishu interactive card with optional header and note footer.

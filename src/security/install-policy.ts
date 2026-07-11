@@ -2,8 +2,13 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig, SecurityConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  forceKillChildProcessTree,
+  shouldDetachChildForProcessTree,
+} from "../process/child-process-tree.js";
 import { normalizePositiveInt, normalizePositiveTimerMs } from "../secrets/shared.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -374,7 +379,7 @@ async function assertSecurePolicyScriptArg(params: {
 }
 
 function truncateText(value: string, maxChars: number): string {
-  return value.length <= maxChars ? value : `${value.slice(0, maxChars)}...`;
+  return value.length <= maxChars ? value : `${truncateUtf16Safe(value, maxChars)}...`;
 }
 
 function createPolicyChildEnv(sourceEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -534,6 +539,7 @@ async function runPolicyCommand(params: {
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
       windowsHide: true,
+      detached: shouldDetachChildForProcessTree(),
     });
 
     let settled = false;
@@ -545,7 +551,7 @@ async function runPolicyCommand(params: {
     let noOutputTimer: NodeJS.Timeout | null = null;
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
+      forceKillChildProcessTree(child);
     }, params.timeoutMs);
 
     const clearTimers = () => {
@@ -556,13 +562,25 @@ async function runPolicyCommand(params: {
       }
     };
 
+    const failCommand = (error: unknown, kill: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimers();
+      if (kill) {
+        forceKillChildProcessTree(child);
+      }
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+
     const armNoOutputTimer = () => {
       if (noOutputTimer) {
         clearTimeout(noOutputTimer);
       }
       noOutputTimer = setTimeout(() => {
         noOutputTimedOut = true;
-        child.kill("SIGKILL");
+        forceKillChildProcessTree(child);
       }, params.noOutputTimeoutMs);
     };
 
@@ -570,12 +588,7 @@ async function runPolicyCommand(params: {
       const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
       outputBytes += Buffer.byteLength(text, "utf8");
       if (outputBytes > params.maxOutputBytes) {
-        child.kill("SIGKILL");
-        if (!settled) {
-          settled = true;
-          clearTimers();
-          reject(new Error(`output exceeded maxOutputBytes (${params.maxOutputBytes})`));
-        }
+        failCommand(new Error(`output exceeded maxOutputBytes (${params.maxOutputBytes})`), true);
         return;
       }
       if (target === "stdout") {
@@ -588,14 +601,15 @@ async function runPolicyCommand(params: {
 
     armNoOutputTimer();
     child.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimers();
-      reject(error);
+      failCommand(error, false);
+    });
+    child.stdout?.on("error", (error) => {
+      failCommand(new Error(`policy stdout stream failed: ${formatErrorMessage(error)}`), true);
     });
     child.stdout?.on("data", (chunk) => append(chunk, "stdout"));
+    child.stderr?.on("error", (error) => {
+      failCommand(new Error(`policy stderr stream failed: ${formatErrorMessage(error)}`), true);
+    });
     child.stderr?.on("data", (chunk) => append(chunk, "stderr"));
     child.on("close", (code, signal) => {
       if (settled) {
@@ -616,9 +630,7 @@ async function runPolicyCommand(params: {
       if (isIgnorableStdinWriteError(error) || settled) {
         return;
       }
-      settled = true;
-      clearTimers();
-      reject(error instanceof Error ? error : new Error(String(error)));
+      failCommand(new Error(`policy stdin stream failed: ${formatErrorMessage(error)}`), true);
     };
     child.stdin?.on("error", handleStdinError);
     try {

@@ -8,8 +8,9 @@ import * as jsonFiles from "../../infra/json-files.js";
 import { createSuiteTempRootTracker, withTempDirSync } from "../../test-helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config.js";
 import type { SessionConfig } from "../types.base.js";
-import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
+import { resolveSessionLifecycleTimestamps, resolveSessionWorkStartError } from "./lifecycle.js";
 import {
+  resolveExplicitSessionFilePath,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPathInDir,
@@ -70,6 +71,16 @@ describe("session path safety", () => {
       { sessionsDir },
     );
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
+  });
+
+  it("rejects explicit sessionFile paths without derived fallback", () => {
+    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+
+    expect(() =>
+      resolveExplicitSessionFilePath("/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl", {
+        sessionsDir,
+      }),
+    ).toThrow(/within sessions directory/);
   });
 
   it("ignores multi-store sentinel paths when deriving session file options", () => {
@@ -337,6 +348,22 @@ describe("session lifecycle timestamps", () => {
     } finally {
       await fsPromises.rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("session work admission", () => {
+  it("fails closed while trusted session initialization is pending", () => {
+    expect(
+      resolveSessionWorkStartError("agent:main:pending", {
+        sessionId: "pending-session",
+        initializationPending: true,
+      }),
+    ).toContain("still initializing");
+    expect(
+      resolveSessionWorkStartError("agent:main:pending", {
+        sessionId: "pending-session",
+      }),
+    ).toBeUndefined();
   });
 });
 

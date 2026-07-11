@@ -269,6 +269,38 @@ describe("Code Mode", () => {
     expect(compacted.catalogToolCount).toBe(2);
   });
 
+  it("keeps direct-only tools model-visible and out of the guest catalog", () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const computer = {
+      ...fakeTool("computer", "Control a desktop"),
+      catalogMode: "direct-only" as const,
+    };
+    const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
+
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, computer, ticket],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      CODE_MODE_EXEC_TOOL_NAME,
+      CODE_MODE_WAIT_TOOL_NAME,
+      "computer",
+    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_create_ticket"]);
+  });
+
+  it("marks only the internal wait control as hidden from channel progress", () => {
+    const { tools } = createCodeModeHarness();
+
+    expect(tools[0].hideFromChannelProgress).toBeUndefined();
+    expect(tools[1].hideFromChannelProgress).toBe(true);
+  });
+
   it("tells models to return the final code value", () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const compacted = applyCodeModeCatalog({
@@ -779,6 +811,71 @@ describe("Code Mode", () => {
     expect(ticket.execute).toHaveBeenCalledTimes(1);
   });
 
+  it("uses tools recovery guidance for guessed tool ids", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const writeTool = pluginTool("write", "Write a file to the workspace");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, writeTool],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: `
+        try {
+          await tools.call("file_write", {
+            path: "memory/2026-05-22.md",
+            content: "remember this",
+          });
+          return "unexpected success";
+        } catch (error) {
+          return error.message;
+        }
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toBe(
+      "Unknown tool id: file_write. Did you mean: write? Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
+    );
+    expect(writeTool.execute).not.toHaveBeenCalled();
+  });
+
+  it("uses tools recovery guidance when no generic Code Mode suggestion matches", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: codeModeTools,
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: `
+        try {
+          await tools.call("missing_tool", {});
+          return "unexpected success";
+        } catch (error) {
+          return error.message;
+        }
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toBe(
+      "Unknown tool id: missing_tool. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
+    );
+  });
+
   it("exposes MCP tools only through the MCP namespace", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const githubCreate = mcpTool({
@@ -789,7 +886,7 @@ describe("Code Mode", () => {
         type: "object",
         properties: {
           owner: { type: "string" },
-          repo: { type: "string", description: "Repository name" },
+          repo: { type: "string", description: "Repository 名称" },
           title: { type: "string", description: "Issue title\nShown in tracker" },
           body: { type: "string", default: "" },
         },
@@ -842,6 +939,9 @@ describe("Code Mode", () => {
         return {
           apiHeader: api.header,
           apiFilePaths: apiFiles.files.map((file) => file.path),
+          listedServerFileBytes: apiFiles.files.find((file) => file.path === "mcp/github.d.ts").bytes,
+          serverFileBytes: serverFile.bytes,
+          serverFileContent: serverFile.content,
           rootFileHasReference: rootFile.content.includes('./github.d.ts'),
           serverFileHasCreateIssue: serverFile.content.includes('function createIssue('),
           serverFileHasTitleDoc: serverFile.content.includes('@param title Issue title Shown in tracker'),
@@ -882,18 +982,31 @@ describe("Code Mode", () => {
       },
       searchHits: [],
       allHasMcp: false,
-      directDescribe: "Unknown tool id: github__create_issue",
-      directCall: "Unknown tool id: github__create_issue",
+      directDescribe:
+        "Unknown tool id: github__create_issue. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
+      directCall:
+        "Unknown tool id: github__create_issue. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
       hasMcp: true,
       apiSchemaTitle: "object",
       apiHeader: expect.stringContaining("function createIssue("),
       apiFilePaths: ["mcp/index.d.ts", "mcp/github.d.ts"],
+      listedServerFileBytes: expect.any(Number),
+      serverFileBytes: expect.any(Number),
+      serverFileContent: expect.stringContaining("Repository 名称"),
       rootFileHasReference: true,
       serverFileHasCreateIssue: true,
       serverFileHasTitleDoc: true,
       rootServers: [{ identifier: "github", serverName: "github", toolCount: 1 }],
     });
-    const value = details.value as { apiHeader: string };
+    const value = details.value as {
+      apiHeader: string;
+      listedServerFileBytes: number;
+      serverFileBytes: number;
+      serverFileContent: string;
+    };
+    expect(value.listedServerFileBytes).toBe(value.serverFileBytes);
+    expect(value.serverFileBytes).toBe(Buffer.byteLength(value.serverFileContent, "utf8"));
+    expect(value.serverFileBytes).toBeGreaterThan(value.serverFileContent.length);
     expect(value.apiHeader).toContain("@param title Issue title Shown in tracker");
     expect(value.apiHeader).not.toContain("@param title Issue title\n");
     expect(value.apiHeader).toContain("title: string;");
@@ -1572,6 +1685,76 @@ describe("Code Mode", () => {
     expect(testing.activeRuns.size).toBe(beforeRunCount);
   });
 
+  it("surfaces the QuickJS error name and message for guest syntax errors", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await codeModeTools[0].execute("code-call-syntax", { code: "const x = ;" }),
+    );
+
+    expect(details.status).toBe("failed");
+    const error = String(details.error);
+    // Regression guard: QuickJS stacks are frames only, so the error used to
+    // collapse to a bare "at openclaw-code-mode:user.js:..." location with the
+    // actual cause dropped. The model now sees the name and message.
+    expect(error).toContain("SyntaxError");
+    expect(error).toContain("unexpected token");
+    expect(error.startsWith("at ")).toBe(false);
+  });
+
+  it("surfaces the QuickJS error name and message for guest runtime errors", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await codeModeTools[0].execute("code-call-runtime", { code: "return missingFn();" }),
+    );
+
+    expect(details.status).toBe("failed");
+    const error = String(details.error);
+    expect(error).toContain("ReferenceError");
+    expect(error).toContain("missingFn is not defined");
+    expect(error.startsWith("at ")).toBe(false);
+  });
+
+  it("does not duplicate host error headers or expose host stack frames", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await codeModeTools[0].execute("code-call-host-error", {
+        code: 'return globalThis.__openclawHostRequest("unsupported", "[]");',
+      }),
+    );
+
+    expect(details).toMatchObject({
+      status: "failed",
+      error: "Error: unsupported code mode bridge method",
+    });
+  });
+
   it("clamps omitted code-mode catalog search limits to maxSearchLimit", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
@@ -1829,7 +2012,7 @@ describe("Code Mode", () => {
     );
 
     expect(details.status).toBe("failed");
-    expect(details.error).toBe("boom");
+    expect(String(details.error)).toContain("Error: boom");
     expect(details.output).toEqual([{ type: "text", text: "before" }]);
   });
 
@@ -1978,9 +2161,11 @@ describe("Code Mode", () => {
     );
 
     expect(result.status).toBe("failed");
-    expect(result).toMatchObject({
-      code: "internal_error",
-      error: "interrupted",
-    });
+    // A guest error whose message happens to be "interrupted" must stay
+    // internal_error and not be misclassified as a QuickJS interrupt/timeout.
+    expect(result).toMatchObject({ code: "internal_error" });
+    if (result.status === "failed") {
+      expect(result.error).toContain("interrupted");
+    }
   });
 });

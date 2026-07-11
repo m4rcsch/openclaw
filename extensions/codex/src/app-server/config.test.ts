@@ -1,6 +1,8 @@
 // Codex tests cover config plugin behavior.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import {
   CODEX_APP_SERVER_CONFIG_KEYS,
@@ -8,11 +10,16 @@ import {
   CODEX_COMPUTER_USE_CONFIG_KEYS,
   CODEX_PLUGIN_ENTRY_CONFIG_KEYS,
   CODEX_PLUGINS_CONFIG_KEYS,
+  CODEX_SUPERVISION_CONFIG_KEYS,
+  CODEX_SUPERVISION_STDIO_ENDPOINT_CONFIG_KEYS,
+  CODEX_SUPERVISION_WEBSOCKET_ENDPOINT_CONFIG_KEYS,
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexAppServerStartOptionsKey,
   fingerprintCodexAppServerNetworkProxyConfigPatch,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
+  resolveCodexAppServerUserHomeDir,
+  resolveCodexSupervisionAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
   resolveCodexModelBackedReviewerPolicyContext,
   resolveOpenClawExecModeForCodexAppServer,
@@ -20,12 +27,31 @@ import {
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexPluginsPolicy,
   shouldAutoApproveCodexAppServerApprovals,
+  withMcpElicitationsApprovalPolicy,
 } from "./config.js";
 
 type RuntimeOptionsParams = NonNullable<Parameters<typeof resolveCodexAppServerRuntimeOptions>[0]>;
 
 function resolveRuntimeForTest(params: RuntimeOptionsParams = {}) {
   return resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null, ...params });
+}
+
+describe("withMcpElicitationsApprovalPolicy", () => {
+  it("returns every field required by Codex granular approval policy", () => {
+    expect(withMcpElicitationsApprovalPolicy("never")).toEqual({
+      granular: {
+        mcp_elicitations: true,
+        request_permissions: false,
+        rules: false,
+        sandbox_approval: false,
+        skill_approval: false,
+      },
+    });
+  });
+});
+
+function envRef(id: string) {
+  return { source: "env" as const, provider: "default", id };
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -357,6 +383,34 @@ describe("Codex app-server config", () => {
     ).toStrictEqual({});
   });
 
+  it("rejects removed app-server topology fields", () => {
+    expect(
+      readCodexPluginConfig({
+        appServer: {
+          transport: "websocket",
+          url: "wss://codex-app-server.example.internal/ws",
+          authToken: "capability-token",
+          connectionClass: "remote",
+          remoteAppsSubstrate: "preconfigured",
+          remoteWorkspace: {
+            localRoot: "/Users/kevinlin/code/openclaw",
+            remoteRoot: "/home/oai/openclaw-workspaces",
+          },
+        },
+      }),
+    ).toStrictEqual({});
+    expect(
+      readCodexPluginConfig({
+        appServer: {
+          remoteWorkspace: {
+            localRoot: "/Users/kevinlin/code/openclaw",
+            remoteRoot: "/home/oai/openclaw-workspaces",
+          },
+        },
+      }),
+    ).toStrictEqual({});
+  });
+
   it("requires a websocket url when websocket transport is configured", () => {
     expect(() =>
       resolveRuntimeForTest({
@@ -364,6 +418,114 @@ describe("Codex app-server config", () => {
         env: {},
       }),
     ).toThrow("appServer.url is required");
+  });
+
+  it("marks authenticated non-loopback websocket app-servers as remote runtimes", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "wss://codex-app-server.example.internal/ws",
+          authToken: "capability-token",
+          remoteWorkspaceRoot: " /home/oai/openclaw-workspaces ",
+        },
+      },
+    });
+
+    expectFields(runtime, "runtime", {
+      connectionClass: "remote",
+      remoteAppsSubstrate: "preconfigured",
+      remoteWorkspaceRoot: "/home/oai/openclaw-workspaces",
+    });
+  });
+
+  it("passes resolved app-server SecretInput strings through to auth token and headers", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "wss://codex-app-server.example.internal/ws",
+          authToken: " resolved-capability-token ",
+          headers: {
+            " x-codex-client-session-token ": " resolved-session-token ",
+            Authorization: " Bearer explicit-token ",
+          },
+        },
+      },
+    });
+
+    expectFields(runtime.start, "runtime start", {
+      authToken: "resolved-capability-token",
+      headers: {
+        "x-codex-client-session-token": "resolved-session-token",
+        Authorization: "Bearer explicit-token",
+      },
+    });
+  });
+
+  it("rejects unresolved app-server auth token SecretRefs at runtime option resolution", () => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "websocket",
+            url: "wss://codex-app-server.example.internal/ws",
+            authToken: envRef("CODEX_APP_SERVER_TOKEN"),
+          },
+        },
+      }),
+    ).toThrow(
+      'plugins.entries.codex.config.appServer.authToken: unresolved SecretRef "env:default:CODEX_APP_SERVER_TOKEN"',
+    );
+  });
+
+  it("rejects unresolved app-server header SecretRefs at runtime option resolution", () => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "websocket",
+            url: "wss://codex-app-server.example.internal/ws",
+            authToken: "capability-token",
+            headers: {
+              "x-codex-client-session-token": envRef("CODEX_CLIENT_SESSION_TOKEN"),
+            },
+          },
+        },
+      }),
+    ).toThrow(
+      'plugins.entries.codex.config.appServer.headers.x-codex-client-session-token: unresolved SecretRef "env:default:CODEX_CLIENT_SESSION_TOKEN"',
+    );
+  });
+
+  it("treats IPv6 loopback websocket app-servers as local loopback", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "ws://[::1]:4242",
+        },
+      },
+    });
+
+    expectFields(runtime, "runtime", {
+      connectionClass: "local-loopback",
+    });
+  });
+
+  it("rejects remote websocket app-servers without identity-bearing auth", () => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "websocket",
+            url: "wss://codex-app-server.example.internal/ws",
+          },
+        },
+      }),
+    ).toThrow(
+      "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
+    );
   });
 
   it("defaults native Codex approvals to unchained local execution", () => {
@@ -380,6 +542,151 @@ describe("Codex app-server config", () => {
     expectFields(runtime.start, "runtime start", {
       command: "codex",
       commandSource: "managed",
+      homeScope: "agent",
+    });
+  });
+
+  it("does not change ordinary harness connection defaults when supervision is enabled", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: { supervision: { enabled: true } },
+    });
+
+    expectFields(runtime.start, "runtime start", {
+      transport: "stdio",
+      homeScope: "agent",
+    });
+    expect(runtime.start).not.toHaveProperty("url");
+  });
+
+  it("uses shared user-home defaults only for supervision control connections", () => {
+    const runtime = resolveCodexSupervisionAppServerRuntimeOptions({
+      pluginConfig: { supervision: { enabled: true } },
+      env: {},
+      requirementsToml: null,
+    });
+
+    expectFields(runtime.start, "runtime start", {
+      transport: "stdio",
+      homeScope: "user",
+    });
+    expect(runtime.start).not.toHaveProperty("url");
+  });
+
+  it("honors explicit app-server settings for supervision control connections", () => {
+    const runtime = resolveCodexSupervisionAppServerRuntimeOptions({
+      pluginConfig: {
+        supervision: { enabled: true },
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:39175",
+        },
+      },
+      env: {},
+      requirementsToml: null,
+    });
+
+    expectFields(runtime.start, "runtime start", {
+      transport: "websocket",
+      homeScope: "agent",
+      url: "ws://127.0.0.1:39175",
+    });
+  });
+
+  it("honors explicit app-server connection settings when supervision is enabled", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        supervision: { enabled: true },
+        appServer: {
+          transport: "websocket",
+          homeScope: "agent",
+          url: "ws://127.0.0.1:39175",
+        },
+      },
+    });
+
+    expectFields(runtime.start, "runtime start", {
+      transport: "websocket",
+      homeScope: "agent",
+      url: "ws://127.0.0.1:39175",
+    });
+  });
+
+  it("rejects Unix app-server connections outside the shared user home", () => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "unix",
+            homeScope: "agent",
+          },
+        },
+      }),
+    ).toThrow(
+      "plugins.entries.codex.config.appServer.transport=unix requires appServer.homeScope=user",
+    );
+  });
+
+  it("rejects non-Unix URLs for Unix app-server connections", () => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "unix",
+            homeScope: "user",
+            url: "ws://127.0.0.1:39175",
+          },
+        },
+      }),
+    ).toThrow(
+      "plugins.entries.codex.config.appServer.url must use unix:// when appServer.transport is unix",
+    );
+  });
+
+  it("resolves opt-in user-home coexistence only for local stdio", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: { appServer: { homeScope: "user" } },
+    });
+
+    expect(runtime.start.homeScope).toBe("user");
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "websocket",
+            url: "ws://127.0.0.1:39175",
+            homeScope: "user",
+          },
+        },
+      }),
+    ).toThrow(
+      "plugins.entries.codex.config.appServer.homeScope=user requires appServer.transport=stdio or unix",
+    );
+  });
+
+  it("resolves the native user Codex home from CODEX_HOME or the OS home", () => {
+    expect(resolveCodexAppServerUserHomeDir({ CODEX_HOME: "/tmp/custom-codex" })).toBe(
+      "/tmp/custom-codex",
+    );
+    expect(resolveCodexAppServerUserHomeDir({}, () => "/Users/tester")).toBe(
+      "/Users/tester/.codex",
+    );
+  });
+
+  it("checks shared user config before enabling model-backed approval review", async () => {
+    await withTempDir("openclaw-codex-user-home-", async (codexHome) => {
+      await fs.writeFile(
+        path.join(codexHome, "config.toml"),
+        'openai_base_url = "http://localhost:8080/v1"\n',
+      );
+
+      expect(
+        canUseCodexModelBackedApprovalsReviewerForModel({
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          env: { CODEX_HOME: codexHome },
+          homeScope: "user",
+        }),
+      ).toBe(false);
     });
   });
 
@@ -403,6 +710,20 @@ describe("Codex app-server config", () => {
         model: "gpt-5.5",
       }),
     ).toBe(false);
+    for (const codexConfigToml of [
+      'openai_base_url = """http://localhost:8080/v1"""\n',
+      "openai_base_url = '''http://localhost:8080/v1'''\n",
+      'chatgpt_base_url = """http://localhost:8080/backend-api"""\n',
+      "[model_providers.openai]\nbase_url = '''http://localhost:8080/v1'''\n",
+    ]) {
+      expect(
+        canUseCodexModelBackedApprovalsReviewerForModel({
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          codexConfigToml,
+        }),
+      ).toBe(false);
+    }
     expect(
       canUseCodexModelBackedApprovalsReviewerForModel({
         modelProvider: "openrouter",
@@ -682,7 +1003,7 @@ describe("Codex app-server config", () => {
     });
   });
 
-  it("selects an allowed guardian approval policy when on-request is unavailable", () => {
+  it("normalizes the deprecated requirements on-failure alias to on-request", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {},
       modelProvider: "openai",
@@ -690,7 +1011,7 @@ describe("Codex app-server config", () => {
     });
 
     expectRuntimePolicy(runtime, {
-      approvalPolicy: "on-failure",
+      approvalPolicy: "on-request",
       sandbox: "workspace-write",
       approvalsReviewer: "auto_review",
     });
@@ -802,8 +1123,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       env: {},
       modelProvider: "openai",
       requirementsPath: "/custom/codex/requirements.toml",
-      readRequirementsFile: (path) => {
-        readPaths.push(path);
+      readRequirementsFile: (requirementsPath) => {
+        readPaths.push(requirementsPath);
         return 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
       },
     });
@@ -823,8 +1144,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       env: { ProgramData: "D:\\ManagedData" },
       modelProvider: "openai",
       platform: "win32",
-      readRequirementsFile: (path) => {
-        readPaths.push(path);
+      readRequirementsFile: (requirementsPath) => {
+        readPaths.push(requirementsPath);
         return 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
       },
     });
@@ -970,6 +1291,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(policy).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: false,
       destructiveApprovalMode: "deny",
       pluginPolicies: [
@@ -1021,6 +1343,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(resolveCodexPluginsPolicy(config)).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: true,
       destructiveApprovalMode: "auto",
       pluginPolicies: [
@@ -1052,11 +1375,60 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
+  it("parses ask native Codex plugin destructive policy", () => {
+    const config = readCodexPluginConfig({
+      appServer: { mode: "guardian" },
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions: "ask",
+        plugins: {
+          "google-calendar": {
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+          },
+          slack: {
+            marketplaceName: "openai-curated",
+            pluginName: "slack",
+            allow_destructive_actions: "auto",
+          },
+        },
+      },
+    });
+
+    expect(config.appServer?.mode).toBe("guardian");
+    expect(config.codexPlugins?.allow_destructive_actions).toBe("ask");
+    expect(resolveCodexPluginsPolicy(config)).toEqual({
+      configured: true,
+      enabled: true,
+      allowAllPlugins: false,
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "ask",
+      pluginPolicies: [
+        {
+          configKey: "google-calendar",
+          marketplaceName: "openai-curated",
+          pluginName: "google-calendar",
+          enabled: true,
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "ask",
+        },
+        {
+          configKey: "slack",
+          marketplaceName: "openai-curated",
+          pluginName: "slack",
+          enabled: true,
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "auto",
+        },
+      ],
+    });
+  });
+
   it("rejects unsupported native Codex plugin destructive policy strings", () => {
     const config = readCodexPluginConfig({
       codexPlugins: {
         enabled: true,
-        allow_destructive_actions: "ask",
+        allow_destructive_actions: "always",
         plugins: {
           slack: {
             marketplaceName: "openai-curated",
@@ -1085,6 +1457,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(policy).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: true,
       destructiveApprovalMode: "allow",
       pluginPolicies: [
@@ -1115,6 +1488,44 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
 
     expect(config.codexPlugins).toBeUndefined();
     expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([]);
+  });
+
+  it("parses opt-in access to all connected account apps", () => {
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        allow_all_plugins: true,
+        allow_destructive_actions: "auto",
+      },
+    });
+
+    expect(config.codexPlugins).toEqual({
+      enabled: true,
+      allow_all_plugins: true,
+      allow_destructive_actions: "auto",
+    });
+    expect(resolveCodexPluginsPolicy(config)).toEqual({
+      configured: true,
+      enabled: true,
+      allowAllPlugins: true,
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "auto",
+      pluginPolicies: [],
+    });
+  });
+
+  it("requires native plugin support before exposing all connected account apps", () => {
+    expect(resolveCodexPluginsPolicy({ codexPlugins: { allow_all_plugins: true } })).toEqual({
+      configured: true,
+      enabled: false,
+      allowAllPlugins: false,
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "allow",
+      pluginPolicies: [],
+    });
+    expect(
+      readCodexPluginConfig({ codexPlugins: { enabled: true, allow_all_plugins: "yes" } }),
+    ).toEqual({});
   });
 
   it("treats configured and environment commands as explicit overrides", () => {
@@ -1514,10 +1925,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
 
   it.each([
     { execMode: "auto", policies: ["never"] },
-    { execMode: "auto", policies: ["on-failure"] },
     { execMode: "auto", policies: ["untrusted"] },
     { execMode: "ask", policies: ["never"] },
-    { execMode: "ask", policies: ["on-failure"] },
     { execMode: "ask", policies: ["untrusted"] },
   ] as const)(
     "fails closed when normalized OpenClaw $execMode mode can only use $policies approvals",
@@ -1547,26 +1956,34 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
-  it("fails closed when normalized OpenClaw auto mode can only use on-failure approvals", () => {
-    expect(() =>
-      resolveRuntimeForTest({
-        pluginConfig: {},
-        execMode: "auto",
-        requirementsToml:
-          'allowed_sandbox_modes = ["read-only"]\nallowed_approval_policies = ["on-failure"]\nallowed_approvals_reviewers = ["user"]\n',
-      }),
-    ).toThrow("tools.exec.mode=auto requires Codex app-server prompting approvals");
+  it("keeps auto mode prompting when requirements use the on-failure alias", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      execMode: "auto",
+      requirementsToml:
+        'allowed_sandbox_modes = ["read-only"]\nallowed_approval_policies = ["on-failure"]\nallowed_approvals_reviewers = ["user"]\n',
+    });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "on-request",
+      sandbox: "read-only",
+      approvalsReviewer: "user",
+    });
   });
 
-  it("fails closed when normalized OpenClaw auto mode cannot force prompting over yolo", () => {
-    expect(() =>
-      resolveRuntimeForTest({
-        pluginConfig: {},
-        execMode: "auto",
-        requirementsToml:
-          'allowed_sandbox_modes = ["danger-full-access", "read-only"]\nallowed_approval_policies = ["never", "on-failure"]\nallowed_approvals_reviewers = ["user"]\n',
-      }),
-    ).toThrow("tools.exec.mode=auto requires Codex app-server prompting approvals");
+  it("prefers the normalized on-request alias over a permitted never policy", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      execMode: "auto",
+      requirementsToml:
+        'allowed_sandbox_modes = ["danger-full-access", "read-only"]\nallowed_approval_policies = ["never", "on-failure"]\nallowed_approvals_reviewers = ["user"]\n',
+    });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "on-request",
+      sandbox: "read-only",
+      approvalsReviewer: "user",
+    });
   });
 
   it("uses user approvals when normalized OpenClaw auto mode cannot use Codex auto-review", () => {
@@ -1638,6 +2055,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         commandSource: "config",
         args: ["app-server", "--listen", "stdio://"],
         headers: {},
+        homeScope: "agent",
       },
     });
   });
@@ -2154,21 +2572,31 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
-  it("lets explicit policy fields override guardian mode", () => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {
-        appServer: {
-          mode: "guardian",
-          approvalPolicy: "on-failure",
-          sandbox: "danger-full-access",
-          approvalsReviewer: "user",
-        },
+  it("normalizes the deprecated approval-policy config alias without dropping other settings", () => {
+    const pluginConfig = readCodexPluginConfig({
+      appServer: {
+        mode: "guardian",
+        approvalPolicy: "on-failure",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
+        command: "/opt/codex/bin/codex",
       },
+    });
+    expect(pluginConfig.appServer).toMatchObject({
+      mode: "guardian",
+      approvalPolicy: "on-request",
+      sandbox: "danger-full-access",
+      approvalsReviewer: "user",
+      command: "/opt/codex/bin/codex",
+    });
+
+    const runtime = resolveRuntimeForTest({
+      pluginConfig,
       env: {},
     });
 
     expectRuntimePolicy(runtime, {
-      approvalPolicy: "on-failure",
+      approvalPolicy: "on-request",
       sandbox: "danger-full-access",
       approvalsReviewer: "user",
     });
@@ -2237,6 +2665,47 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(second).not.toContain("sk-second");
   });
 
+  it("derives distinct shared-client keys for distinct headers without exposing them", () => {
+    const first = codexAppServerStartOptionsKey({
+      transport: "websocket",
+      command: "codex",
+      args: [],
+      url: "ws://127.0.0.1:39175",
+      headers: {
+        Authorization: "Bearer first",
+        "x-codex-client-session-token": "session-first",
+      },
+    });
+    const second = codexAppServerStartOptionsKey({
+      transport: "websocket",
+      command: "codex",
+      args: [],
+      url: "ws://127.0.0.1:39175",
+      headers: {
+        Authorization: "Bearer second",
+        "x-codex-client-session-token": "session-second",
+      },
+    });
+
+    expect(first).not.toEqual(second);
+    expect(
+      codexAppServerStartOptionsKey({
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        url: "ws://127.0.0.1:39175",
+        headers: {
+          Authorization: "Bearer first",
+          "x-codex-client-session-token": "session-first",
+        },
+      }),
+    ).toEqual(first);
+    expect(first).not.toContain("Bearer first");
+    expect(first).not.toContain("session-first");
+    expect(second).not.toContain("Bearer second");
+    expect(second).not.toContain("session-second");
+  });
+
   it("keeps secret-derived shared-client keys stable across module reloads", async () => {
     const startOptions = {
       transport: "websocket" as const,
@@ -2270,6 +2739,19 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     );
   });
 
+  it("derives distinct shared-client keys for distinct process working directories", () => {
+    const startOptions = {
+      transport: "stdio" as const,
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+    };
+
+    expect(codexAppServerStartOptionsKey({ ...startOptions, cwd: "/tmp/project-a" })).not.toEqual(
+      codexAppServerStartOptionsKey({ ...startOptions, cwd: "/tmp/project-b" }),
+    );
+  });
+
   it("keeps runtime config keys aligned with manifest schema and UI hints", async () => {
     const manifest = JSON.parse(
       await fs.readFile(new URL("../../openclaw.plugin.json", import.meta.url), "utf8"),
@@ -2281,6 +2763,9 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           codexPlugins: {
             properties: Record<string, unknown>;
             additionalProperties: boolean;
+          };
+          supervision: {
+            properties: Record<string, unknown>;
           };
         };
       };
@@ -2326,6 +2811,25 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     ).additionalProperties.properties;
     expect(Object.keys(pluginEntryProperties).toSorted()).toEqual(
       [...CODEX_PLUGIN_ENTRY_CONFIG_KEYS].toSorted(),
+    );
+    const supervisionProperties = manifest.configSchema.properties.supervision.properties;
+    expect(Object.keys(supervisionProperties).toSorted()).toEqual(
+      [...CODEX_SUPERVISION_CONFIG_KEYS].toSorted(),
+    );
+    for (const key of CODEX_SUPERVISION_CONFIG_KEYS) {
+      expectUiHintLabel(manifest, `supervision.${key}`);
+    }
+    const supervisionEndpointVariants = (
+      supervisionProperties.endpoints as {
+        items: { oneOf: Array<{ properties: Record<string, unknown> }> };
+      }
+    ).items.oneOf;
+    expect(supervisionEndpointVariants).toHaveLength(2);
+    expect(Object.keys(supervisionEndpointVariants[0]?.properties ?? {}).toSorted()).toEqual(
+      [...CODEX_SUPERVISION_STDIO_ENDPOINT_CONFIG_KEYS].toSorted(),
+    );
+    expect(Object.keys(supervisionEndpointVariants[1]?.properties ?? {}).toSorted()).toEqual(
+      [...CODEX_SUPERVISION_WEBSOCKET_ENDPOINT_CONFIG_KEYS].toSorted(),
     );
   });
 

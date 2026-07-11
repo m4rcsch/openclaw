@@ -56,7 +56,47 @@ function elementAt(block: Record<string, unknown>, index: number) {
   return element;
 }
 
+function largeTablePresentation() {
+  return {
+    blocks: [
+      {
+        type: "table",
+        caption: "Large pipeline",
+        headers: ["Account"],
+        rows: Array.from({ length: 100 }, (_entry, index) => [
+          index === 0 ? "<@U123>" : `account-${String(index)} ${"x".repeat(110)}`,
+        ]),
+      },
+    ],
+  };
+}
+
 describe("handleSlackMessageAction", () => {
+  it("defaults reactions to the current inbound Slack message", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "react",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          emoji: "✅",
+        },
+        toolContext: { currentMessageId: "171234.567" },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(firstAction(invoke)).toMatchObject({
+      action: "react",
+      channelId: "C1",
+      emoji: "✅",
+      messageId: "171234.567",
+    });
+  });
+
   it("merges presentation and interactive blocks when sending", async () => {
     const invoke = createInvokeSpy();
 
@@ -86,9 +126,323 @@ describe("handleSlackMessageAction", () => {
 
     const action = firstAction(invoke);
     expect(blockAt(action, 0).type).toBe("section");
-    const actionsBlock = blockAt(action, 1);
+    expect(blockAt(action, 1).type).toBe("section");
+    const actionsBlock = blockAt(action, 2);
     expect(actionsBlock.type).toBe("actions");
     expect(elementAt(actionsBlock, 0).value).toBe("approve");
+  });
+
+  it("sends native charts with a complete accessible text representation", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          message: "Revenue summary",
+          presentation: {
+            blocks: [
+              {
+                type: "chart",
+                chartType: "pie",
+                title: "Revenue mix",
+                segments: [
+                  { label: "Product", value: 60 },
+                  { label: "Services", value: 40 },
+                ],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = firstAction(invoke);
+    expect(action.content).toBe(
+      "Revenue summary\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
+    );
+    expect(blockAt(action, 1)).toEqual({
+      type: "data_visualization",
+      title: "Revenue mix",
+      chart: {
+        type: "pie",
+        segments: [
+          { label: "Product", value: 60 },
+          { label: "Services", value: 40 },
+        ],
+      },
+    });
+  });
+
+  it("sends native tables with a complete accessible text representation", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          message: "Pipeline summary",
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Pipeline",
+                headers: ["Account", "ARR"],
+                rows: [
+                  ["Acme", 125000],
+                  ["Globex", 82000],
+                ],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(firstAction(invoke).content).toBe(
+      "Pipeline summary\n\nPipeline (table)\n- Account: Acme; ARR: 125000\n- Account: Globex; ARR: 82000",
+    );
+  });
+
+  it("edits native tables with a complete accessible text representation", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "edit",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          messageId: "171234.567",
+          message: "Updated pipeline",
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Pipeline",
+                headers: ["Account", "Stage"],
+                rows: [["Acme", "Won"]],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(firstAction(invoke)).toMatchObject({
+      action: "editMessage",
+      channelId: "C1",
+      messageId: "171234.567",
+      content: "Updated pipeline\n\nPipeline (table)\n- Account: Acme; Stage: Won",
+    });
+  });
+
+  it("routes non-native tables through Slack-safe text with native controls", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          presentation: largeTablePresentation(),
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Refresh", value: "refresh" }],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = firstAction(invoke);
+    expect(action.separateTextAndBlocks).toBe(true);
+    expect(action.textIsSlackMrkdwn).toBe(true);
+    expect(action.content).toContain("- Account: &lt;@U123&gt;");
+    expect(action.content).toContain("- Account: account-99");
+    const actionsBlock = blockAt(action, 0);
+    expect(actionsBlock.type).toBe("actions");
+    expect(elementAt(actionsBlock, 0).value).toBe("refresh");
+    expect(String(action.content).length).toBeGreaterThan(8000);
+  });
+
+  it("keeps lossless presentation controls native during table fallback", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          message: "Pipeline summary",
+          presentation: {
+            title: "Quarterly report",
+            blocks: [
+              { type: "context", text: "Confidential" },
+              ...largeTablePresentation().blocks,
+              { type: "buttons", buttons: [{ label: "Refresh", value: "refresh" }] },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = firstAction(invoke);
+    expect(action.separateTextAndBlocks).toBe(true);
+    expect(blockAt(action, 0)).toMatchObject({
+      type: "actions",
+      elements: [{ type: "button", value: "refresh" }],
+    });
+    expect(action.content).toContain("Quarterly report");
+    expect(action.content).toContain("Confidential");
+    expect(action.content).toContain("- Account: account-99");
+    expect(action.content).not.toContain("- Refresh");
+  });
+
+  it("keeps a native table while assigning its over-8k fallback one text owner", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Pipeline",
+                headers: ["Account"],
+                rows: Array.from({ length: 100 }, (_entry, index) => [
+                  index === 0 ? "<@U123>" : `account-${String(index)} ${"x".repeat(65)}`,
+                ]),
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = firstAction(invoke);
+    expect(action.separateTextAndBlocks).toBe(true);
+    expect(blockAt(action, 0)).toMatchObject({ type: "data_table", caption: "Pipeline" });
+    expect(action.content).toContain("- Account: account-99");
+    expect(String(action.content).match(/Pipeline \(table\)/g)).toHaveLength(1);
+  });
+
+  it("keeps edit accessibility complete while rendering table fallback beside controls", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "edit",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          messageId: "171234.567",
+          presentation: {
+            title: "Quarterly report",
+            blocks: [
+              {
+                type: "table",
+                caption: "Wide pipeline",
+                headers: Array.from({ length: 21 }, (_entry, index) => `Column ${String(index)}`),
+                rows: [Array.from({ length: 21 }, (_entry, index) => `Value ${String(index)}`)],
+              },
+              { type: "buttons", buttons: [{ label: "Refresh", value: "refresh" }] },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = firstAction(invoke);
+    expect(action.content).toContain("Quarterly report");
+    expect(action.content).toContain("- Refresh");
+    expect(blockAt(action, 0).type).toBe("actions");
+    expect(blockAt(action, 1)).toMatchObject({
+      type: "section",
+      text: { type: "mrkdwn", verbatim: true },
+    });
+  });
+
+  it("uses text-only edits for non-native tables that fit one message", async () => {
+    const invoke = createInvokeSpy();
+    const headers = Array.from({ length: 21 }, (_entry, index) => `Column ${String(index)}`);
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "edit",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          messageId: "171234.567",
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Wide pipeline",
+                headers,
+                rows: [headers.map((_header, index) => `Value ${String(index)}`)],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = firstAction(invoke);
+    expect(action.blocks).toBeUndefined();
+    expect(action.content).toContain("Column 20: Value 20");
+  });
+
+  it("rejects non-native table edits whose complete fallback cannot fit", async () => {
+    const invoke = createInvokeSpy();
+
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "edit",
+          cfg: {},
+          params: {
+            channelId: "C1",
+            messageId: "171234.567",
+            presentation: largeTablePresentation(),
+          },
+        } as never,
+        invoke: invoke as never,
+      }),
+    ).rejects.toThrow(
+      "Slack presentation fallback exceeds OpenClaw's 8000-character per-edit limit",
+    );
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("keeps generated Slack control ids unique when presentation and interactive controls are merged", async () => {
@@ -124,10 +478,10 @@ describe("handleSlackMessageAction", () => {
     });
 
     const action = firstAction(invoke);
-    const firstButtons = blockAt(action, 0);
+    const firstButtons = blockAt(action, 1);
     expect(firstButtons.block_id).toBe("openclaw_reply_buttons_1");
     expect(elementAt(firstButtons, 0).action_id).toBe("openclaw:reply_button:1:1");
-    const secondButtons = blockAt(action, 1);
+    const secondButtons = blockAt(action, 2);
     expect(secondButtons.block_id).toBe("openclaw_reply_buttons_2");
     expect(elementAt(secondButtons, 0).action_id).toBe("openclaw:reply_button:2:1");
   });
@@ -162,7 +516,7 @@ describe("handleSlackMessageAction", () => {
     const action = firstAction(invoke);
     expect(action.action).toBe("sendMessage");
     expect(action.to).toBe("channel:C1");
-    expect(action.content).toBe("Approval required");
+    expect(action.content).toBe("Approval required\n\n- Approve");
     expect(action.mediaUrl).toBe("https://example.com/report.md");
     const actionsBlock = blockAt(action, 0);
     expect(actionsBlock.type).toBe("actions");
@@ -385,6 +739,36 @@ describe("handleSlackMessageAction", () => {
     expect(firstInvokeCall(invoke)[1]).toEqual({});
   });
 
+  it.each(["react", "reactions", "read", "list-pins"] as const)(
+    "forwards trusted tool context for %s authorization",
+    async (action) => {
+      const invoke = createInvokeSpy();
+      const toolContext = {
+        currentChannelProvider: "slack",
+        currentChannelId: "C1",
+      };
+
+      await handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action,
+          cfg: {},
+          params: {
+            channelId: "C1",
+            ...(action === "react"
+              ? { messageId: "1712345678.654321", emoji: "white_check_mark" }
+              : {}),
+            ...(action === "reactions" ? { messageId: "1712345678.654321" } : {}),
+          },
+          toolContext,
+        } as never,
+        invoke: invoke as never,
+      });
+
+      expect(firstInvokeCall(invoke)[2]).toBe(toolContext);
+    },
+  );
+
   it("rejects fractional read limits before invoking Slack actions", async () => {
     const invoke = createInvokeSpy();
 
@@ -547,6 +931,112 @@ describe("handleSlackMessageAction", () => {
         invoke: createInvokeSpy() as never,
       }),
     ).rejects.toThrow(/fileId/i);
+  });
+
+  it("defaults member-info userId to the inbound sender when omitted", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "member-info",
+        cfg: {},
+        params: {},
+        accountId: "OPS",
+        requesterAccountId: "ops",
+        requesterSenderId: "U123",
+        toolContext: { currentChannelProvider: " Slack " },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "memberInfo", userId: "U123" }),
+      expect.any(Object),
+      expect.objectContaining({ currentChannelProvider: " Slack " }),
+    );
+  });
+
+  it("defaults member-info userId through the configured default Slack account", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "member-info",
+        cfg: { channels: { slack: { defaultAccount: "ops", accounts: { ops: {} } } } },
+        params: {},
+        requesterAccountId: "OPS",
+        requesterSenderId: "U123",
+        toolContext: { currentChannelProvider: "slack" },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "memberInfo", userId: "U123" }),
+      expect.any(Object),
+      expect.objectContaining({ currentChannelProvider: "slack" }),
+    );
+  });
+
+  it.each([
+    ["has no inbound sender", { toolContext: { currentChannelProvider: "slack" } }],
+    ["has no source provider", { requesterSenderId: "U123" }],
+    [
+      "has no source account",
+      {
+        accountId: "default",
+        requesterSenderId: "U123",
+        toolContext: { currentChannelProvider: "slack" },
+      },
+    ],
+    [
+      "targets another Slack account",
+      {
+        accountId: "other",
+        requesterAccountId: "default",
+        requesterSenderId: "U123",
+        toolContext: { currentChannelProvider: "slack" },
+      },
+    ],
+    [
+      "comes from another provider",
+      { requesterSenderId: "U123", toolContext: { currentChannelProvider: "telegram" } },
+    ],
+  ])("rejects member-info without userId when the request %s", async (_label, context) => {
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: { action: "member-info", cfg: {}, params: {}, ...context } as never,
+        invoke: createInvokeSpy() as never,
+      }),
+    ).rejects.toThrow(/member-info requires a userId/i);
+  });
+
+  it("prefers an explicit member-info userId over the inbound sender", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "member-info",
+        cfg: {},
+        params: { userId: "U999" },
+        accountId: "other",
+        requesterAccountId: "default",
+        requesterSenderId: "U123",
+        conversationReadOrigin: "direct-operator",
+        toolContext: { currentChannelProvider: "telegram" },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "memberInfo", userId: "U999" }),
+      expect.any(Object),
+      expect.objectContaining({ currentChannelProvider: "telegram" }),
+    );
   });
 });
 

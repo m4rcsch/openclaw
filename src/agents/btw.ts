@@ -7,6 +7,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
+import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
@@ -19,6 +20,7 @@ import type {
   TextContent,
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
+import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles/external-cli-auth-selection.js";
@@ -30,6 +32,7 @@ import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-
 import { resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
+import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import {
   resolveAvailableAgentHarnessPolicy,
   resolvePluginHarnessPolicyToolsAllow,
@@ -43,6 +46,7 @@ import {
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
+  applySecretRefHeaderSentinels,
   getApiKeyForModel,
   requireApiKey,
 } from "./model-auth.js";
@@ -53,7 +57,12 @@ import {
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
+import {
+  protectPreparedProviderRuntimeAuth,
+  unwrapSecretSentinelsForProviderEgress,
+} from "./provider-secret-egress.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
+import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
@@ -374,9 +383,12 @@ type RunBtwSideQuestionParams = {
   isNewSession: boolean;
   messageChannel?: string;
   messageProvider?: string;
+  chatType?: ChatType;
   agentAccountId?: string;
   messageTo?: string;
   messageThreadId?: string | number;
+  chatId?: string;
+  messageActionTurnCapability?: string;
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;
@@ -479,13 +491,47 @@ export async function runBtwSideQuestion(
     config: params.cfg,
   });
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
-  const harness = selectAgentHarness({
-    provider: params.provider,
-    modelId: params.model,
-    config: params.cfg,
-    agentId: sessionAgentId,
-    sessionKey: params.sessionKey,
-  });
+  const preparedHarnesses = new Map<string, AgentHarness>();
+  const prepareHarness = async (provider: string, modelId: string): Promise<AgentHarness> => {
+    const agentHarnessId = isModelSelectionLocked(params.sessionEntry)
+      ? params.sessionEntry.agentHarnessId
+      : undefined;
+    const agentHarnessRuntimeOverride = agentHarnessId
+      ? undefined
+      : resolveSessionRuntimeOverrideForProvider({
+          provider,
+          entry: params.sessionEntry,
+          cfg: params.cfg,
+        });
+    const selectedHarnessId = agentHarnessId ?? agentHarnessRuntimeOverride ?? "configured";
+    const key = `${provider}/${modelId}/${selectedHarnessId}`;
+    const cached = preparedHarnesses.get(key);
+    if (cached) {
+      return cached;
+    }
+    await ensureSelectedAgentHarnessPlugin({
+      provider,
+      modelId,
+      config: params.cfg,
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
+      workspaceDir,
+      ...(agentHarnessId ? { agentHarnessId } : {}),
+      ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
+    });
+    const harness = selectAgentHarness({
+      provider,
+      modelId,
+      config: params.cfg,
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
+      ...(agentHarnessId ? { agentHarnessId } : {}),
+      ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
+    });
+    preparedHarnesses.set(key, harness);
+    return harness;
+  };
+  const harness = await prepareHarness(params.provider, params.model);
   let runtimeSelection: Awaited<ReturnType<typeof resolveRuntimeModel>> | undefined;
   const resolveRuntimeSelection = async () => {
     if (!runtimeSelection) {
@@ -647,13 +693,12 @@ export async function runBtwSideQuestion(
   }
 
   const runtimeSelectionForHarness = await resolveRuntimeSelection();
-  const runtimeHarness = selectAgentHarness({
-    provider: runtimeSelectionForHarness.model.provider,
-    modelId: runtimeSelectionForHarness.model.id,
-    config: params.cfg,
-    agentId: sessionAgentId,
-    sessionKey: params.sessionKey,
-  });
+  // Model resolution can canonicalize a legacy provider alias, so reselect against the resolved
+  // provider/model instead of reusing the raw route's selection.
+  const runtimeHarness = await prepareHarness(
+    runtimeSelectionForHarness.model.provider,
+    runtimeSelectionForHarness.model.id,
+  );
   if (runtimeHarness.runSideQuestion) {
     return runHarnessSideQuestion(runtimeHarness, runtimeSelectionForHarness);
   }
@@ -702,6 +747,7 @@ export async function runBtwSideQuestion(
     profileId: effectiveAuthProfileId,
     ...(authStore ? { store: authStore } : {}),
     agentDir: params.agentDir,
+    secretSentinels: true,
   });
   const resolvedAuthProfileId = apiKeyInfo.profileId ?? effectiveAuthProfileId;
   let runtimeModel = model;
@@ -710,29 +756,34 @@ export async function runBtwSideQuestion(
       ? undefined
       : requireApiKey(apiKeyInfo, model.provider);
   if (apiKey) {
-    const preparedAuth = await prepareProviderRuntimeAuth({
+    const preparedAuth = protectPreparedProviderRuntimeAuth({
+      sourceApiKey: apiKey,
       provider: model.provider,
-      config: params.cfg,
-      workspaceDir,
-      env: process.env,
-      context: {
+      preparedAuth: await prepareProviderRuntimeAuth({
+        provider: model.provider,
         config: params.cfg,
-        agentDir: params.agentDir,
         workspaceDir,
         env: process.env,
-        provider: model.provider,
-        modelId: model.id,
-        model,
-        apiKey,
-        authMode: apiKeyInfo.mode,
-        profileId: resolvedAuthProfileId,
-      },
+        context: {
+          config: params.cfg,
+          agentDir: params.agentDir,
+          workspaceDir,
+          env: process.env,
+          provider: model.provider,
+          modelId: model.id,
+          model,
+          apiKey: unwrapSecretSentinelsForProviderEgress(apiKey, "provider runtime auth exchange"),
+          authMode: apiKeyInfo.mode,
+          profileId: resolvedAuthProfileId,
+        },
+      }),
     });
     runtimeModel = applyPreparedRuntimeAuthToModel(runtimeModel, preparedAuth);
     if (preparedAuth?.apiKey) {
       apiKey = preparedAuth.apiKey;
     }
   }
+  runtimeModel = applySecretRefHeaderSentinels(runtimeModel, params.cfg);
 
   // Use the provider's own stream fn so providers like Ollama (which build
   // `/api/chat` or `/v1/chat/completions` paths based on api mode) construct

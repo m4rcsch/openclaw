@@ -1,7 +1,7 @@
 // Codex helper module supports config behavior.
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { hostname as readHostName } from "node:os";
+import { homedir as readHomeDir, hostname as readHostName } from "node:os";
 import path from "node:path";
 import {
   resolveProviderIdForAuth,
@@ -13,10 +13,21 @@ import {
 } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import {
+  buildSecretInputSchema,
+  normalizeResolvedSecretInputString,
+  type SecretInput,
+} from "openclaw/plugin-sdk/secret-input";
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
-import type { CodexSandboxPolicy, CodexServiceTier, JsonObject, JsonValue } from "./protocol.js";
+import type {
+  CodexApprovalPolicy,
+  CodexSandboxPolicy,
+  CodexServiceTier,
+  JsonObject,
+  JsonValue,
+} from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStartOptionsKeySecret");
 const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
@@ -26,8 +37,11 @@ const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_CONFIG_TOML_FILENAME = "config.toml";
 const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
-type CodexAppServerTransportMode = "stdio" | "websocket";
+export type CodexAppServerTransportMode = "stdio" | "websocket" | "unix";
+export type CodexAppServerHomeScope = "agent" | "user";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
+export type CodexAppServerConnectionClass = "local-loopback" | "remote";
+export type CodexAppServerRemoteAppsSubstrate = "preconfigured";
 type OpenClawExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 type OpenClawExecSecurity = "deny" | "allowlist" | "full";
 type OpenClawExecAsk = "off" | "on-miss" | "always";
@@ -50,25 +64,15 @@ type CodexAppServerDefaultPolicy = {
   sandbox?: CodexAppServerSandboxMode;
   dangerFullAccessAllowed?: boolean;
 };
-export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
+export type CodexAppServerApprovalPolicy = "never" | "on-request" | "untrusted";
 export type CodexAppServerApprovalPolicySource = "config" | "env" | "requirements" | "implicit";
-export type CodexAppServerEffectiveApprovalPolicy =
-  | CodexAppServerApprovalPolicy
-  | {
-      granular: {
-        mcp_elicitations: boolean;
-        rules: boolean;
-        sandbox_approval: boolean;
-        request_permissions?: boolean;
-        skill_approval?: boolean;
-      };
-    };
+export type CodexAppServerEffectiveApprovalPolicy = CodexApprovalPolicy;
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
-export type CodexPluginDestructivePolicy = boolean | "auto";
-export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto";
+export type CodexPluginDestructivePolicy = boolean | "auto" | "ask";
+export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto" | "ask";
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
 
@@ -103,8 +107,33 @@ export type CodexPluginEntryConfig = {
 
 export type CodexPluginsConfig = {
   enabled?: boolean;
+  allow_all_plugins?: boolean;
   allow_destructive_actions?: CodexPluginDestructivePolicy;
   plugins?: Record<string, CodexPluginEntryConfig>;
+};
+
+export type CodexSupervisionEndpoint =
+  | {
+      id?: string;
+      label?: string;
+      transport?: "stdio-proxy";
+      command?: string;
+      args?: string[];
+      cwd?: string;
+    }
+  | {
+      id?: string;
+      label?: string;
+      transport: "websocket";
+      url: string;
+      authTokenEnv?: string;
+    };
+
+export type CodexSupervisionConfig = {
+  enabled?: boolean;
+  endpoints?: CodexSupervisionEndpoint[];
+  allowRawTranscripts?: boolean;
+  allowWriteControls?: boolean;
 };
 
 export type CodexAppServerExperimentalConfig = {
@@ -151,6 +180,7 @@ export type ResolvedCodexPluginPolicy = {
 export type ResolvedCodexPluginsPolicy = {
   configured: boolean;
   enabled: boolean;
+  allowAllPlugins: boolean;
   allowDestructiveActions: boolean;
   destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
   pluginPolicies: ResolvedCodexPluginPolicy[];
@@ -158,9 +188,13 @@ export type ResolvedCodexPluginsPolicy = {
 
 export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
+  homeScope?: CodexAppServerHomeScope;
   command: string;
   commandSource?: CodexAppServerCommandSource;
+  managedFallbackCommandPaths?: string[];
   args: string[];
+  /** Process working directory for shipped Supervisor stdio endpoint compatibility. */
+  cwd?: string;
   url?: string;
   authToken?: string;
   headers: Record<string, string>;
@@ -170,6 +204,9 @@ export type CodexAppServerStartOptions = {
 
 export type CodexAppServerRuntimeOptions = {
   start: CodexAppServerStartOptions;
+  connectionClass: CodexAppServerConnectionClass;
+  remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate;
+  remoteWorkspaceRoot?: string;
   codeModeOnly: boolean;
   requestTimeoutMs: number;
   turnCompletionIdleTimeoutMs: number;
@@ -178,7 +215,7 @@ export type CodexAppServerRuntimeOptions = {
   approvalPolicySource?: CodexAppServerApprovalPolicySource;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
-  serviceTier?: CodexServiceTier;
+  serviceTier?: CodexServiceTier | null;
   networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
 };
 
@@ -189,6 +226,7 @@ export type CodexModelBackedReviewerContext = {
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
   codexConfigToml?: string | null;
+  homeScope?: CodexAppServerHomeScope;
 };
 
 export type CodexPluginConfig = {
@@ -200,15 +238,18 @@ export type CodexPluginConfig = {
   };
   computerUse?: CodexComputerUseConfig;
   codexPlugins?: CodexPluginsConfig;
+  supervision?: CodexSupervisionConfig;
   appServer?: {
     mode?: CodexAppServerPolicyMode;
     transport?: CodexAppServerTransportMode;
+    homeScope?: CodexAppServerHomeScope;
     command?: string;
     args?: string[] | string;
     url?: string;
-    authToken?: string;
-    headers?: Record<string, string>;
+    authToken?: SecretInput;
+    headers?: Record<string, SecretInput>;
     clearEnv?: string[];
+    remoteWorkspaceRoot?: string;
     codeModeOnly?: boolean;
     requestTimeoutMs?: number;
     turnCompletionIdleTimeoutMs?: number;
@@ -236,12 +277,14 @@ export function shouldAutoApproveCodexAppServerApprovals(
 export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "mode",
   "transport",
+  "homeScope",
   "command",
   "args",
   "url",
   "authToken",
   "headers",
   "clearEnv",
+  "remoteWorkspaceRoot",
   "codeModeOnly",
   "requestTimeoutMs",
   "turnCompletionIdleTimeoutMs",
@@ -270,6 +313,7 @@ export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
 
 export const CODEX_PLUGINS_CONFIG_KEYS = [
   "enabled",
+  "allow_all_plugins",
   "allow_destructive_actions",
   "plugins",
 ] as const;
@@ -281,23 +325,53 @@ export const CODEX_PLUGIN_ENTRY_CONFIG_KEYS = [
   "allow_destructive_actions",
 ] as const;
 
+export const CODEX_SUPERVISION_CONFIG_KEYS = [
+  "enabled",
+  "endpoints",
+  "allowRawTranscripts",
+  "allowWriteControls",
+] as const;
+
+export const CODEX_SUPERVISION_STDIO_ENDPOINT_CONFIG_KEYS = [
+  "id",
+  "label",
+  "transport",
+  "command",
+  "args",
+  "cwd",
+] as const;
+
+export const CODEX_SUPERVISION_WEBSOCKET_ENDPOINT_CONFIG_KEYS = [
+  "id",
+  "label",
+  "transport",
+  "url",
+  "authTokenEnv",
+] as const;
+
 const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
 const DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX = "openclaw-network";
 
-const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
+const codexAppServerTransportSchema = z.enum(["stdio", "websocket", "unix"]);
+const codexAppServerHomeScopeSchema = z.enum(["agent", "user"]);
+const SecretInputSchema = buildSecretInputSchema();
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
-const codexAppServerApprovalPolicySchema = z.enum([
-  "never",
-  "on-request",
-  "on-failure",
-  "untrusted",
-]);
+const codexAppServerApprovalPolicySchema = z.preprocess(
+  // Preserve the rest of a shipped plugin config until doctor persists the
+  // canonical value. Rejecting this field would discard the whole config.
+  (value) => (value === "on-failure" ? "on-request" : value),
+  z.enum(["never", "on-request", "untrusted"]),
+);
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
 const codexDynamicToolsLoadingSchema = z.enum(["searchable", "direct"]);
-const codexPluginDestructivePolicySchema = z.union([z.boolean(), z.literal("auto")]);
+const codexPluginDestructivePolicySchema = z.union([
+  z.boolean(),
+  z.literal("auto"),
+  z.literal("ask"),
+]);
 const codexAppServerServiceTierSchema = z
   .preprocess(
     (value) => (value === null ? null : normalizeCodexServiceTier(value)),
@@ -309,6 +383,7 @@ const codexAppServerExperimentalSchema = z
     sandboxExecServer: z.boolean().optional(),
   })
   .strict();
+const codexAppServerRemoteWorkspaceRootSchema = z.string().trim().min(1);
 const codexAppServerNetworkProxyDomainPermissionSchema = z.enum(["allow", "deny"]);
 const codexAppServerNetworkProxyUnixSocketPermissionSchema = z.enum(["allow", "none"]);
 const codexAppServerNetworkProxySchema = z
@@ -318,7 +393,9 @@ const codexAppServerNetworkProxySchema = z
     baseProfile: z.enum(["read-only", "workspace"]).optional(),
     mode: z.enum(["limited", "full"]).optional(),
     domains: z.record(z.string(), codexAppServerNetworkProxyDomainPermissionSchema).optional(),
-    unixSockets: z.record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema).optional(),
+    unixSockets: z
+      .record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema)
+      .optional(),
     proxyUrl: z.string().trim().min(1).optional(),
     socksUrl: z.string().trim().min(1).optional(),
     enableSocks5: z.boolean().optional(),
@@ -342,8 +419,40 @@ const codexPluginEntryConfigSchema = z
 const codexPluginsConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
+    allow_all_plugins: z.boolean().optional(),
     allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
     plugins: z.record(z.string(), codexPluginEntryConfigSchema).optional(),
+  })
+  .strict();
+
+const codexSupervisionEndpointSchema = z.union([
+  z
+    .object({
+      id: z.string().optional(),
+      label: z.string().optional(),
+      transport: z.literal("stdio-proxy").optional(),
+      command: z.string().optional(),
+      args: z.array(z.string()).optional(),
+      cwd: z.string().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      id: z.string().optional(),
+      label: z.string().optional(),
+      transport: z.literal("websocket"),
+      url: z.string(),
+      authTokenEnv: z.string().optional(),
+    })
+    .strict(),
+]);
+
+const codexSupervisionConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    endpoints: z.array(codexSupervisionEndpointSchema).optional(),
+    allowRawTranscripts: z.boolean().optional(),
+    allowWriteControls: z.boolean().optional(),
   })
   .strict();
 
@@ -372,16 +481,19 @@ const codexPluginConfigSchema = z
       .strict()
       .optional(),
     codexPlugins: z.unknown().optional(),
+    supervision: codexSupervisionConfigSchema.optional(),
     appServer: z
       .object({
         mode: codexAppServerPolicyModeSchema.optional(),
         transport: codexAppServerTransportSchema.optional(),
+        homeScope: codexAppServerHomeScopeSchema.optional(),
         command: z.string().optional(),
         args: z.union([z.array(z.string()), z.string()]).optional(),
         url: z.string().optional(),
-        authToken: z.string().optional(),
-        headers: z.record(z.string(), z.string()).optional(),
+        authToken: SecretInputSchema.optional(),
+        headers: z.record(z.string(), SecretInputSchema).optional(),
         clearEnv: z.array(z.string()).optional(),
+        remoteWorkspaceRoot: codexAppServerRemoteWorkspaceRootSchema.optional(),
         codeModeOnly: z.boolean().optional(),
         requestTimeoutMs: z.number().positive().optional(),
         turnCompletionIdleTimeoutMs: z.number().positive().optional(),
@@ -467,6 +579,7 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
   return {
     configured,
     enabled,
+    allowAllPlugins: enabled && config?.allow_all_plugins === true,
     allowDestructiveActions: destructivePolicy.allowDestructiveActions,
     destructiveApprovalMode: destructivePolicy.destructiveApprovalMode,
     pluginPolicies,
@@ -477,8 +590,8 @@ function resolveCodexPluginDestructivePolicy(policy: CodexPluginDestructivePolic
   allowDestructiveActions: boolean;
   destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
 } {
-  if (policy === "auto") {
-    return { allowDestructiveActions: true, destructiveApprovalMode: "auto" };
+  if (policy === "auto" || policy === "ask") {
+    return { allowDestructiveActions: true, destructiveApprovalMode: policy };
   }
   return {
     allowDestructiveActions: policy,
@@ -506,8 +619,10 @@ export function resolveCodexAppServerRuntimeOptions(
   } = {},
 ): CodexAppServerRuntimeOptions {
   const env = params.env ?? process.env;
-  const config = readCodexPluginConfig(params.pluginConfig).appServer ?? {};
+  const pluginConfig = readCodexPluginConfig(params.pluginConfig);
+  const config = pluginConfig.appServer ?? {};
   const transport = resolveTransport(config.transport);
+  const homeScope: CodexAppServerHomeScope = config.homeScope ?? "agent";
   const configCommand = readNonEmptyString(config.command);
   const envCommand = readNonEmptyString(env.OPENCLAW_CODEX_APP_SERVER_BIN);
   const command = configCommand ?? envCommand ?? "codex";
@@ -522,8 +637,14 @@ export function resolveCodexAppServerRuntimeOptions(
   const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
   const headers = normalizeHeaders(config.headers);
   const clearEnv = normalizeStringList(config.clearEnv);
-  const authToken = readNonEmptyString(config.authToken);
-  const url = readNonEmptyString(config.url);
+  const authToken = normalizeCodexAppServerSecretInput({
+    value: config.authToken,
+    path: "plugins.entries.codex.config.appServer.authToken",
+  });
+  const url = readNonEmptyString(config.url) ?? (transport === "unix" ? "unix://" : undefined);
+  const connectionClass = inferCodexAppServerConnectionClass({ transport, url });
+  const remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate = "preconfigured";
+  const remoteWorkspaceRoot = normalizeRemoteWorkspaceRoot(config.remoteWorkspaceRoot);
   const execMode = resolveEffectiveOpenClawExecModeForCodexAppServer({
     execMode: params.execMode,
     execPolicy: params.execPolicy,
@@ -544,6 +665,7 @@ export function resolveCodexAppServerRuntimeOptions(
     env,
     agentDir: params.agentDir,
     codexConfigToml: params.codexConfigToml,
+    homeScope,
   });
   const explicitModelBackedReviewer =
     explicitApprovalsReviewer === "auto_review" ||
@@ -616,6 +738,27 @@ export function resolveCodexAppServerRuntimeOptions(
       "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",
     );
   }
+  if (transport === "websocket" && homeScope === "user") {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.homeScope=user requires appServer.transport=stdio or unix",
+    );
+  }
+  if (transport === "unix" && homeScope !== "user") {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.transport=unix requires appServer.homeScope=user",
+    );
+  }
+  if (transport === "unix" && !url?.startsWith("unix://")) {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.url must use unix:// when appServer.transport is unix",
+    );
+  }
+  assertCodexAppServerConnectionSecurity({
+    transport,
+    url,
+    authToken,
+    headers,
+  });
 
   const configApprovalPolicy = resolveApprovalPolicy(config.approvalPolicy);
   const envApprovalPolicy = resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY);
@@ -635,6 +778,7 @@ export function resolveCodexAppServerRuntimeOptions(
   return {
     start: {
       transport,
+      homeScope,
       command,
       commandSource,
       args: args.length > 0 ? args : ["app-server", "--listen", "stdio://"],
@@ -643,6 +787,9 @@ export function resolveCodexAppServerRuntimeOptions(
       headers,
       ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
     },
+    connectionClass,
+    remoteAppsSubstrate,
+    ...(remoteWorkspaceRoot ? { remoteWorkspaceRoot } : {}),
     codeModeOnly: config.codeModeOnly === true,
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
     turnCompletionIdleTimeoutMs: normalizePositiveNumber(
@@ -712,6 +859,7 @@ export function isTrustedCodexModelBackedOpenAIProvider(params: {
   model?: string;
   agentDir?: string;
   codexConfigToml?: string | null;
+  homeScope?: CodexAppServerHomeScope;
 }): boolean {
   if (!openAIBaseUrlEnvOverridesAreTrustedForModelBackedReview(params.env)) {
     return false;
@@ -845,12 +993,14 @@ export function codexAppServerStartOptionsKey(
     transport: options.transport,
     command: options.command,
     commandSource: options.commandSource ?? null,
+    managedFallbackCommandPaths: [...(options.managedFallbackCommandPaths ?? [])],
     args: options.args,
+    cwd: options.cwd ?? null,
     url: options.url ?? null,
     authToken: hashSecretForKey(options.authToken, "authToken"),
-    headers: Object.entries(options.headers).toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    ),
+    headers: Object.entries(options.headers)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => [key, hashSecretForKey(value, `header:${key}`)]),
     env: Object.entries(options.env ?? {})
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
@@ -878,6 +1028,23 @@ export function codexSandboxPolicyForTurn(
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
   };
+}
+
+/** Resolves the passive supervision control connection without changing harness defaults. */
+export function resolveCodexSupervisionAppServerRuntimeOptions(
+  params: NonNullable<Parameters<typeof resolveCodexAppServerRuntimeOptions>[0]> = {},
+): CodexAppServerRuntimeOptions {
+  const pluginConfig = readCodexPluginConfig(params.pluginConfig);
+  const appServer = pluginConfig.appServer ?? {};
+  const transport = resolveTransport(appServer.transport);
+  const homeScope = appServer.homeScope ?? (transport === "websocket" ? "agent" : "user");
+  return resolveCodexAppServerRuntimeOptions({
+    ...params,
+    pluginConfig: {
+      ...pluginConfig,
+      appServer: { ...appServer, homeScope },
+    },
+  });
 }
 
 function resolveCodexAppServerNetworkProxy(
@@ -995,6 +1162,8 @@ export function withMcpElicitationsApprovalPolicy(
         mcp_elicitations: true,
         rules: false,
         sandbox_approval: false,
+        request_permissions: false,
+        skill_approval: false,
       },
     };
   }
@@ -1003,12 +1172,93 @@ export function withMcpElicitationsApprovalPolicy(
       mcp_elicitations: true,
       rules: true,
       sandbox_approval: true,
+      request_permissions: true,
+      skill_approval: true,
     },
   };
 }
 
 function resolveTransport(value: unknown): CodexAppServerTransportMode {
-  return value === "websocket" ? "websocket" : "stdio";
+  return value === "websocket" || value === "unix" ? value : "stdio";
+}
+
+function normalizeRemoteWorkspaceRoot(value: string | undefined): string | undefined {
+  return readNonEmptyString(value);
+}
+
+function inferCodexAppServerConnectionClass(params: {
+  transport: CodexAppServerTransportMode;
+  url?: string;
+}): CodexAppServerConnectionClass {
+  if (params.transport !== "websocket") {
+    return "local-loopback";
+  }
+  return params.url && isLoopbackWebSocketUrl(params.url) ? "local-loopback" : "remote";
+}
+
+function assertCodexAppServerConnectionClassConfig(params: {
+  connectionClass: CodexAppServerConnectionClass;
+  authToken?: string;
+  headers: Record<string, string>;
+}): void {
+  if (
+    params.connectionClass === "remote" &&
+    !hasIdentityBearingWebSocketAuth({
+      authToken: params.authToken,
+      headers: params.headers,
+    })
+  ) {
+    throw new Error(
+      "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
+    );
+  }
+}
+
+/** Applies the canonical remote-auth boundary to any Codex AppServer transport. */
+export function assertCodexAppServerConnectionSecurity(params: {
+  transport: CodexAppServerTransportMode;
+  url?: string;
+  authToken?: string;
+  headers: Record<string, string>;
+}): void {
+  assertCodexAppServerConnectionClassConfig({
+    connectionClass: inferCodexAppServerConnectionClass(params),
+    authToken: params.authToken,
+    headers: params.headers,
+  });
+}
+
+function isLoopbackWebSocketUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase();
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]" ||
+    host.startsWith("127.")
+  );
+}
+
+function hasIdentityBearingWebSocketAuth(params: {
+  authToken?: string;
+  headers: Record<string, string>;
+}): boolean {
+  if (readNonEmptyString(params.authToken)) {
+    return true;
+  }
+  return Object.entries(params.headers).some(
+    ([key, value]) =>
+      key.trim().toLowerCase() === "authorization" && Boolean(readNonEmptyString(value)),
+  );
 }
 
 function resolvePolicyMode(value: unknown): CodexAppServerPolicyMode | undefined {
@@ -1193,17 +1443,31 @@ function parseTopLevelRequirementsStringArray(content: string, key: string): str
   return parseRequirementsStringArray(topLevelContent, key);
 }
 
-function parseTomlStringValue(content: string, key: string): string | undefined {
-  const match = parseTomlStringAssignment(content, tomlDottedKeyPattern(key));
-  return match ? (match[1] ?? match[2] ?? "") : undefined;
+function parseTomlStringValue(content: string, key: string): string | undefined | false {
+  return parseTomlStringAssignmentValue(content, tomlDottedKeyPattern(key));
 }
 
-function parseInlineOpenAIModelProviderBaseUrl(content: string): string | undefined {
-  const match = parseTomlStringAssignment(
+function parseInlineOpenAIModelProviderBaseUrl(content: string): string | undefined | false {
+  return parseTomlStringAssignmentValue(
     content,
     `${tomlKeyPattern("model_providers")}\\s*=\\s*\\{[\\s\\S]*?${tomlKeyPattern("openai")}\\s*=\\s*\\{[\\s\\S]*?${tomlKeyPattern("base_url")}`,
   );
-  return match ? (match[1] ?? match[2] ?? "") : undefined;
+}
+
+function parseTomlStringAssignmentValue(
+  content: string,
+  keyPattern: string,
+): string | undefined | false {
+  const assignment = content.match(new RegExp(`(?:^|\\n)\\s*${keyPattern}\\s*=\\s*([^\\r\\n]*)`));
+  if (!assignment) {
+    return undefined;
+  }
+  const rawValue = assignment[1]?.trimStart() ?? "";
+  if (rawValue.startsWith('"""') || rawValue.startsWith("'''")) {
+    return false;
+  }
+  const match = parseTomlStringAssignment(content, keyPattern);
+  return match ? (match[1] ?? match[2] ?? "") : false;
 }
 
 function parseTomlStringAssignment(content: string, keyPattern: string): RegExpMatchArray | null {
@@ -1356,6 +1620,11 @@ function normalizeRequirementsApprovalPolicy(
   value: string,
 ): CodexAppServerApprovalPolicy | undefined {
   const normalized = value.trim().toLowerCase();
+  // Codex 0.143 keeps this deprecated requirements-file alias in its core
+  // parser, but app-server exposes only the canonical on-request value.
+  if (normalized === "on-failure") {
+    return "on-request";
+  }
   return resolveApprovalPolicy(normalized);
 }
 
@@ -1377,9 +1646,6 @@ function selectGuardianApprovalPolicy(
     throw new Error(
       `tools.exec.mode=${execModeRequiringPromptingApprovals} requires Codex app-server prompting approvals`,
     );
-  }
-  if (allowedApprovalPolicies.has("on-failure")) {
-    return "on-failure";
   }
   if (allowedApprovalPolicies.has("untrusted")) {
     return "untrusted";
@@ -1440,12 +1706,16 @@ function isTrustedCodexModelBackedApprovalsReviewerProvider(
       model: params.model,
       agentDir: params.agentDir,
       codexConfigToml: params.codexConfigToml,
+      homeScope: params.homeScope,
     })
   );
 }
 
 function readCodexBaseUrlOverridesForModelBackedReview(
-  params: Pick<CodexModelBackedReviewerContext, "agentDir" | "codexConfigToml">,
+  params: Pick<
+    CodexModelBackedReviewerContext,
+    "agentDir" | "codexConfigToml" | "env" | "homeScope"
+  >,
 ): { openAI: string[]; chatGPT: string[] } | false {
   const configToml = readCodexAppServerConfigToml(params);
   if (configToml === false) {
@@ -1459,23 +1729,37 @@ function readCodexBaseUrlOverridesForModelBackedReview(
     firstTomlTableOffset(configToml),
   );
   const modelProviderOpenAISection = parseTomlTableSection(configToml, "model_providers.openai");
+  const openAIBaseUrl = parseTomlStringValue(topLevelContent, "openai_base_url");
+  const chatGPTBaseUrl = parseTomlStringValue(topLevelContent, "chatgpt_base_url");
+  const dottedProviderBaseUrl = parseTomlStringValue(
+    topLevelContent,
+    "model_providers.openai.base_url",
+  );
+  const inlineProviderBaseUrl = parseInlineOpenAIModelProviderBaseUrl(topLevelContent);
+  const sectionProviderBaseUrl = modelProviderOpenAISection
+    ? parseTomlStringValue(modelProviderOpenAISection, "base_url")
+    : undefined;
+  const openAI = [
+    openAIBaseUrl,
+    dottedProviderBaseUrl,
+    inlineProviderBaseUrl,
+    sectionProviderBaseUrl,
+  ];
+  const chatGPT = [chatGPTBaseUrl];
+  if ([...openAI, ...chatGPT].includes(false)) {
+    return false;
+  }
   return {
-    openAI: [
-      parseTomlStringValue(topLevelContent, "openai_base_url"),
-      parseTomlStringValue(topLevelContent, "model_providers.openai.base_url"),
-      parseInlineOpenAIModelProviderBaseUrl(topLevelContent),
-      modelProviderOpenAISection
-        ? parseTomlStringValue(modelProviderOpenAISection, "base_url")
-        : undefined,
-    ].filter((entry): entry is string => entry !== undefined),
-    chatGPT: [parseTomlStringValue(topLevelContent, "chatgpt_base_url")].filter(
-      (entry): entry is string => entry !== undefined,
-    ),
+    openAI: openAI.filter((entry): entry is string => typeof entry === "string"),
+    chatGPT: chatGPT.filter((entry): entry is string => typeof entry === "string"),
   };
 }
 
 function readCodexAppServerConfigToml(
-  params: Pick<CodexModelBackedReviewerContext, "agentDir" | "codexConfigToml">,
+  params: Pick<
+    CodexModelBackedReviewerContext,
+    "agentDir" | "codexConfigToml" | "env" | "homeScope"
+  >,
 ): string | undefined | false {
   if (params.codexConfigToml !== undefined) {
     return params.codexConfigToml ?? undefined;
@@ -1492,13 +1776,25 @@ function readCodexAppServerConfigToml(
 }
 
 function resolveCodexAppServerConfigPath(
-  params: Pick<CodexModelBackedReviewerContext, "agentDir">,
+  params: Pick<CodexModelBackedReviewerContext, "agentDir" | "env" | "homeScope">,
 ): string | undefined {
+  if (params.homeScope === "user") {
+    return path.join(resolveCodexAppServerUserHomeDir(params.env), CODEX_CONFIG_TOML_FILENAME);
+  }
   const agentDir = readNonEmptyString(params.agentDir);
   const codexHome = agentDir
     ? path.join(path.resolve(agentDir), CODEX_APP_SERVER_HOME_DIRNAME)
     : undefined;
   return codexHome ? path.join(codexHome, CODEX_CONFIG_TOML_FILENAME) : undefined;
+}
+
+/** Resolves the native user Codex home used by Desktop and the CLI. */
+export function resolveCodexAppServerUserHomeDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = readHomeDir,
+): string {
+  const configured = readNonEmptyString(env.CODEX_HOME);
+  return path.resolve(configured ?? path.join(homedir(), ".codex"));
 }
 
 function readErrorCode(error: unknown): string | undefined {
@@ -1668,12 +1964,10 @@ function selectGuardianSandbox(
 }
 
 function resolveApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {
-  return value === "on-request" ||
-    value === "on-failure" ||
-    value === "untrusted" ||
-    value === "never"
-    ? value
-    : undefined;
+  if (value === "on-failure") {
+    return "on-request";
+  }
+  return value === "on-request" || value === "untrusted" || value === "never" ? value : undefined;
 }
 
 function resolveSandbox(value: unknown): CodexAppServerSandboxMode | undefined {
@@ -1952,9 +2246,25 @@ function normalizeHeaders(value: unknown): Record<string, string> {
   }
   return Object.fromEntries(
     Object.entries(value)
-      .map(([key, child]) => [key.trim(), readNonEmptyString(child)] as const)
+      .map(
+        ([key, child]) =>
+          [
+            key.trim(),
+            normalizeCodexAppServerSecretInput({
+              value: child,
+              path: `plugins.entries.codex.config.appServer.headers.${key}`,
+            }),
+          ] as const,
+      )
       .filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1])),
   );
+}
+
+function normalizeCodexAppServerSecretInput(params: {
+  value: unknown;
+  path: string;
+}): string | undefined {
+  return normalizeResolvedSecretInputString(params);
 }
 
 function normalizeStringList(value: unknown): string[] {

@@ -29,6 +29,7 @@ const resolveEmbeddedAgentStreamFnMock = vi.fn();
 const prepareCliRunContextMock = vi.fn();
 const executePreparedCliRunMock = vi.fn();
 const diagDebugMock = vi.fn();
+const ensureSelectedAgentHarnessPluginMock = vi.fn();
 
 vi.mock("../llm/stream.js", async () => {
   const original = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
@@ -72,6 +73,7 @@ vi.mock("./embedded-agent-runner/model.js", () => ({
 }));
 
 vi.mock("./model-auth.js", () => ({
+  applySecretRefHeaderSentinels: (model: unknown) => model,
   ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
   ensureAuthProfileStoreWithoutExternalProfiles: (...args: unknown[]) =>
     ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
@@ -119,7 +121,7 @@ vi.mock("./model-runtime-aliases.js", () => ({
         }
       }
     }
-    return runtime || undefined;
+    return runtime === "claude-cli" ? runtime : undefined;
   },
 }));
 
@@ -129,6 +131,11 @@ vi.mock("./cli-runner/prepare.runtime.js", () => ({
 
 vi.mock("./cli-runner/execute.runtime.js", () => ({
   executePreparedCliRun: (...args: unknown[]) => executePreparedCliRunMock(...args),
+}));
+
+vi.mock("./harness/runtime-plugin.js", () => ({
+  ensureSelectedAgentHarnessPlugin: (...args: unknown[]) =>
+    ensureSelectedAgentHarnessPluginMock(...args),
 }));
 
 vi.mock("./embedded-agent-runner/runs.js", () => ({
@@ -455,6 +462,7 @@ describe("runBtwSideQuestion", () => {
     prepareCliRunContextMock.mockReset();
     executePreparedCliRunMock.mockReset();
     diagDebugMock.mockReset();
+    ensureSelectedAgentHarnessPluginMock.mockReset();
     clearAgentHarnesses();
 
     readFileMock.mockResolvedValue("mock transcript");
@@ -597,7 +605,10 @@ describe("runBtwSideQuestion", () => {
     registerAgentHarness({
       id: "codex",
       label: "Codex test harness",
-      supports: () => ({ supported: true, priority: 100 }),
+      supports: ({ provider }) =>
+        provider === "openai"
+          ? { supported: true, priority: 100 }
+          : { supported: false, reason: "Codex only supports OpenAI providers" },
       runAttempt: vi.fn(),
       runSideQuestion: codexSideQuestionMock,
     });
@@ -674,6 +685,44 @@ describe("runBtwSideQuestion", () => {
     ).toContain("session-1.jsonl");
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a model-locked session on its persisted harness for BTW", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Locked Codex answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+
+    const result = await runSideQuestion({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        },
+      },
+      sessionEntry: createSessionEntry({
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      }),
+    });
+
+    expect(result).toEqual({ text: "Locked Codex answer." });
+    expect(codexSideQuestionMock).toHaveBeenCalledOnce();
+    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentHarnessId: "codex" }),
+    );
+    expect(ensureSelectedAgentHarnessPluginMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ agentHarnessRuntimeOverride: expect.anything() }),
+    );
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
   });
 
   it("reselects the Codex hook after resolving legacy openai-codex route state", async () => {
@@ -833,6 +882,55 @@ describe("runBtwSideQuestion", () => {
 
     expect(result).toEqual({ text: "Direct fallback answer." });
     expect(streamSimpleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads a cold Copilot harness before selecting the /btw provider fallback", async () => {
+    let loaded = false;
+    ensureSelectedAgentHarnessPluginMock.mockImplementation(async () => {
+      if (loaded) {
+        return;
+      }
+      loaded = true;
+      registerAgentHarness({
+        id: "copilot",
+        label: "Copilot test harness",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: vi.fn(),
+      });
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "github-copilot",
+      id: "gpt-4o",
+      api: "openai-completions",
+    });
+    mockDoneAnswer("Copilot fallback answer.");
+
+    const result = await runSideQuestion({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "github-copilot/gpt-4o": { agentRuntime: { id: "copilot" } },
+            },
+          },
+        },
+      } as never,
+      provider: "github-copilot",
+      model: "gpt-4o",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "Copilot fallback answer." });
+    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledOnce();
+    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith({
+      provider: "github-copilot",
+      modelId: "gpt-4o",
+      config: expect.any(Object),
+      agentId: "main",
+      sessionKey: DEFAULT_SESSION_KEY,
+      workspaceDir: "/tmp/workspace",
+    });
+    expect(streamSimpleMock).toHaveBeenCalledOnce();
   });
 
   it("runs CLI-runtime alias BTW as an ephemeral CLI side question", async () => {

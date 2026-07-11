@@ -35,8 +35,6 @@ export const ACP_INSTALL_USAGE = "Usage: /acp install";
 export const ACP_DOCTOR_USAGE = "Usage: /acp doctor";
 export const ACP_SESSIONS_USAGE = "Usage: /acp sessions";
 export const ACP_STEER_OUTPUT_LIMIT = 800;
-export { SESSION_ID_RE } from "../../../sessions/session-id.js";
-
 export type AcpAction =
   | "spawn"
   | "cancel"
@@ -195,7 +193,7 @@ export function parseSpawnInput(
   let label: string | undefined;
   let rawAgentId: string | undefined;
 
-  for (let i = 0; i < normalizedTokens.length; ) {
+  for (let i = 0; i < normalizedTokens.length;) {
     const token = normalizedTokens[i] ?? "";
 
     const modeOption = readOptionValue({ tokens: normalizedTokens, index: i, flag: "--mode" });
@@ -332,7 +330,7 @@ export function parseSteerInput(
   let sessionToken: string | undefined;
   const instructionTokens: string[] = [];
 
-  for (let i = 0; i < normalizedTokens.length; ) {
+  for (let i = 0; i < normalizedTokens.length;) {
     const sessionOption = readOptionValue({
       tokens: normalizedTokens,
       index: i,

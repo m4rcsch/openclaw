@@ -1,6 +1,8 @@
 // Slack plugin module implements message action dispatch behavior.
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
+import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   normalizeInteractiveReply,
@@ -8,10 +10,15 @@ import {
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import {
-  buildSlackInteractiveBlocks,
-  buildSlackPresentationBlocks,
-  resolveSlackInteractiveBlockOffsets,
-} from "./blocks-render.js";
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import { resolveDefaultSlackAccountId } from "./accounts.js";
+import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
+import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { SLACK_SECTION_TEXT_MAX } from "./presentation.js";
+import { resolveSlackReplyRenderPlan } from "./reply-blocks.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
@@ -46,18 +53,13 @@ export async function handleSlackMessageAction(params: {
     const mediaUrl = readStringParam(actionParams, "media", { trim: false });
     const presentation = normalizeMessagePresentation(actionParams.presentation);
     const interactive = normalizeInteractiveReply(actionParams.interactive);
-    const presentationBlocks = presentation
-      ? buildSlackPresentationBlocks(presentation)
-      : undefined;
-    const interactiveBlocks = interactive
-      ? buildSlackInteractiveBlocks(
-          interactive,
-          resolveSlackInteractiveBlockOffsets(presentationBlocks),
-        )
-      : undefined;
-    const mergedBlocks = [...(presentationBlocks ?? []), ...(interactiveBlocks ?? [])];
-    const blocks = mergedBlocks.length > 0 ? mergedBlocks : undefined;
-    if (!content && !mediaUrl && !blocks) {
+    const renderPlan = resolveSlackReplyRenderPlan({ presentation, interactive }, content, {
+      textLimit: SLACK_TEXT_LIMIT,
+    });
+    const blocks = renderPlan.mode === "single" ? renderPlan.blocks : renderPlan.blockPart?.blocks;
+    const accessibleContent =
+      renderPlan.mode === "single" ? renderPlan.text : renderPlan.fallbackText;
+    if (!accessibleContent && !mediaUrl && !blocks) {
       throw new Error("Slack send requires message, blocks, or media.");
     }
     const replyBroadcast = readBooleanParam(actionParams, "replyBroadcast");
@@ -72,13 +74,18 @@ export async function handleSlackMessageAction(params: {
       {
         action: "sendMessage",
         to,
-        content: content ?? "",
+        content: accessibleContent,
         mediaUrl: mediaUrl ?? undefined,
         accountId,
         threadTs: threadId ?? replyTo ?? undefined,
         ...(topLevel ? { topLevel: true } : {}),
         ...(replyBroadcast ? { replyBroadcast } : {}),
         ...(blocks ? { blocks } : {}),
+        ...(renderPlan.mode === "split"
+          ? { separateTextAndBlocks: true, textIsSlackMrkdwn: true }
+          : renderPlan.textIsSlackMrkdwn
+            ? { textIsSlackMrkdwn: true }
+            : {}),
       },
       cfg,
       ctx.toolContext,
@@ -86,9 +93,16 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "react") {
-    const messageId = readStringParam(actionParams, "messageId", {
-      required: true,
+    const messageIdRaw = resolveReactionMessageId({
+      args: actionParams,
+      toolContext: ctx.toolContext,
     });
+    if (messageIdRaw == null) {
+      throw new Error(
+        "messageId required. Provide messageId explicitly or react to the current inbound message.",
+      );
+    }
+    const messageId = String(messageIdRaw);
     const emoji = readStringParam(actionParams, "emoji", { allowEmpty: true });
     const remove = typeof actionParams.remove === "boolean" ? actionParams.remove : undefined;
     return await invoke(
@@ -101,6 +115,7 @@ export async function handleSlackMessageAction(params: {
         accountId,
       },
       cfg,
+      ctx.toolContext,
     );
   }
 
@@ -120,6 +135,7 @@ export async function handleSlackMessageAction(params: {
         accountId,
       },
       cfg,
+      ctx.toolContext,
     );
   }
 
@@ -139,7 +155,7 @@ export async function handleSlackMessageAction(params: {
     if (includeReadThreadId) {
       readAction.threadId = readStringParam(actionParams, "threadId");
     }
-    return await invoke(readAction, cfg);
+    return await invoke(readAction, cfg, ctx.toolContext);
   }
 
   if (action === "edit") {
@@ -148,8 +164,32 @@ export async function handleSlackMessageAction(params: {
     });
     const content = readStringParam(actionParams, "message", { allowEmpty: true });
     const presentation = normalizeMessagePresentation(actionParams.presentation);
-    const blocks = presentation ? buildSlackPresentationBlocks(presentation) : undefined;
-    if (!content && !blocks) {
+    const renderPlan = resolveSlackReplyRenderPlan({ presentation }, content, {
+      textLimit: SLACK_TEXT_LIMIT,
+    });
+    const accessibleContent = renderPlan.hookText;
+    if (renderPlan.mode === "split" && accessibleContent.length > SLACK_TEXT_LIMIT) {
+      throw new Error(
+        `Slack presentation fallback exceeds OpenClaw's ${String(SLACK_TEXT_LIMIT)}-character per-edit limit. Send a new message instead.`,
+      );
+    }
+    const presentationFallbackBlocks =
+      renderPlan.mode === "split" && renderPlan.blockPart
+        ? chunkTextForOutbound(renderPlan.fallbackText, SLACK_SECTION_TEXT_MAX).map((text) => ({
+            type: "section" as const,
+            text: { type: "mrkdwn" as const, text, verbatim: true },
+          }))
+        : [];
+    const nativeBlocks =
+      renderPlan.mode === "single"
+        ? (renderPlan.blocks ?? [])
+        : (renderPlan.blockPart?.blocks ?? []);
+    const mergedBlocks = [...nativeBlocks, ...presentationFallbackBlocks];
+    if (mergedBlocks.length > SLACK_MAX_BLOCKS) {
+      throw new Error(`Slack blocks cannot exceed ${String(SLACK_MAX_BLOCKS)} items after render`);
+    }
+    const blocks = mergedBlocks.length > 0 ? mergedBlocks : undefined;
+    if (!accessibleContent && !blocks) {
       throw new Error("Slack edit requires message or blocks.");
     }
     return await invoke(
@@ -157,11 +197,12 @@ export async function handleSlackMessageAction(params: {
         action: "editMessage",
         channelId: resolveChannelId(),
         messageId,
-        content: content ?? "",
+        content: accessibleContent,
         blocks,
         accountId,
       },
       cfg,
+      ctx.toolContext,
     );
   }
 
@@ -177,6 +218,7 @@ export async function handleSlackMessageAction(params: {
         accountId,
       },
       cfg,
+      ctx.toolContext,
     );
   }
 
@@ -193,12 +235,26 @@ export async function handleSlackMessageAction(params: {
         accountId,
       },
       cfg,
+      ctx.toolContext,
     );
   }
 
   if (action === "member-info") {
-    const userId = readStringParam(actionParams, "userId", { required: true });
-    return await invoke({ action: "memberInfo", userId, accountId }, cfg);
+    const requesterAccountId = ctx.requesterAccountId
+      ? normalizeAccountId(ctx.requesterAccountId)
+      : undefined;
+    const targetAccountId = normalizeAccountId(accountId ?? resolveDefaultSlackAccountId(cfg));
+    const requesterUserId =
+      normalizeOptionalLowercaseString(ctx.toolContext?.currentChannelProvider) === "slack" &&
+      requesterAccountId !== undefined &&
+      requesterAccountId === targetAccountId
+        ? normalizeOptionalString(ctx.requesterSenderId)
+        : undefined;
+    const userId = readStringParam(actionParams, "userId") ?? requesterUserId;
+    if (!userId) {
+      throw new Error("member-info requires a userId outside a current Slack conversation.");
+    }
+    return await invoke({ action: "memberInfo", userId, accountId }, cfg, ctx.toolContext);
   }
 
   if (action === "emoji-list") {

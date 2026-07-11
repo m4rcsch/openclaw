@@ -2,8 +2,13 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
+import {
+  readResponseTextPrefix,
+  readResponseWithLimit,
+} from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
+import { looksLikeSmsPhoneNumber, normalizeSmsPhoneNumber } from "./phone.js";
 import type { ResolvedSmsAccount, SmsInboundMessage, SmsSendResult } from "./types.js";
 
 const TWILIO_ACCOUNTS_URL = "https://api.twilio.com/2010-04-01/Accounts";
@@ -11,6 +16,9 @@ const TWILIO_MESSAGING_URL = "https://messaging.twilio.com/v1";
 const TWILIO_API_HOSTNAME = "api.twilio.com";
 const TWILIO_MESSAGING_HOSTNAME = "messaging.twilio.com";
 const TWILIO_API_TIMEOUT_MS = 30_000;
+const TWILIO_API_SUCCESS_BODY_LIMIT_BYTES = 1 * 1024 * 1024;
+const TWILIO_API_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const TRUNCATED_RESPONSE_SUFFIX = "... [truncated]";
 const WEBHOOK_BODY_LIMIT_BYTES = 32 * 1024;
 const WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 
@@ -31,6 +39,8 @@ type TwilioMessagePayload = {
   from?: string;
   status?: string;
 };
+
+const TWILIO_CHANNEL_ADDRESS_RE = /^([a-z][a-z0-9-]*):(.*)$/i;
 
 export type TwilioIncomingPhoneNumber = {
   sid: string;
@@ -126,28 +136,26 @@ function requestSearch(req: IncomingMessage): string {
   }
 }
 
-function configuredUrlHasQuery(url: string): boolean {
+function stripUrlFragment(url: string): string {
   const hashIndex = url.indexOf("#");
-  const beforeHash = hashIndex === -1 ? url : url.slice(0, hashIndex);
-  return beforeHash.includes("?");
+  return hashIndex === -1 ? url : url.slice(0, hashIndex);
 }
 
 export function resolveTwilioWebhookSignatureUrl(params: {
   req: IncomingMessage;
   publicWebhookUrl: string;
 }): string {
-  if (configuredUrlHasQuery(params.publicWebhookUrl)) {
-    return params.publicWebhookUrl;
+  // Twilio connection overrides live in the fragment but are excluded from its
+  // signature input. Strip without URL reserialization so exact port/path bytes survive.
+  const signatureBaseUrl = stripUrlFragment(params.publicWebhookUrl);
+  if (signatureBaseUrl.includes("?")) {
+    return signatureBaseUrl;
   }
   const search = requestSearch(params.req);
   if (!search) {
-    return params.publicWebhookUrl;
+    return signatureBaseUrl;
   }
-  const hashIndex = params.publicWebhookUrl.indexOf("#");
-  if (hashIndex === -1) {
-    return `${params.publicWebhookUrl}${search}`;
-  }
-  return `${params.publicWebhookUrl.slice(0, hashIndex)}${search}${params.publicWebhookUrl.slice(hashIndex)}`;
+  return `${signatureBaseUrl}${search}`;
 }
 
 export class TwilioSmsApiError extends Error {
@@ -214,8 +222,27 @@ export function verifyTwilioSignature(params: {
   );
 }
 
+function parseTwilioInboundFrom(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const channelAddress = trimmed.match(TWILIO_CHANNEL_ADDRESS_RE);
+  const kind = channelAddress?.[1]?.toLowerCase();
+  if (kind && kind !== "rcs") {
+    return null;
+  }
+  const phoneNumber = normalizeSmsPhoneNumber(channelAddress?.[2] ?? trimmed);
+  if (!looksLikeSmsPhoneNumber(phoneNumber)) {
+    return null;
+  }
+  return phoneNumber;
+}
+
 export function buildTwilioInboundMessage(form: Record<string, string>): SmsInboundMessage | null {
-  const from = firstTrimmedString(form.From);
+  // Signature verification owns the untouched form. Canonicalize only after
+  // that boundary so Twilio channel prefixes never change its signed input.
+  const from = parseTwilioInboundFrom(firstTrimmedString(form.From));
   const to = firstTrimmedString(form.To);
   const body = firstString(form.Body);
   const accountSid = firstTrimmedString(form.AccountSid);
@@ -265,6 +292,26 @@ function basicAuthHeader(account: ResolvedSmsAccount): string {
   return `Basic ${Buffer.from(`${account.accountSid}:${account.authToken}`).toString("base64")}`;
 }
 
+function appendTruncatedResponseSuffix(text: string): string {
+  return `${text.trimEnd()}${TRUNCATED_RESPONSE_SUFFIX}`;
+}
+
+async function readTwilioApiResponseText(response: Response): Promise<string> {
+  const maxBytes = response.ok
+    ? TWILIO_API_SUCCESS_BODY_LIMIT_BYTES
+    : TWILIO_API_ERROR_BODY_LIMIT_BYTES;
+  if (!response.ok) {
+    const prefix = await readResponseTextPrefix(response, maxBytes);
+    return prefix.truncated ? appendTruncatedResponseSuffix(prefix.text) : prefix.text;
+  }
+
+  const body = await readResponseWithLimit(response, maxBytes, {
+    onOverflow: ({ size, maxBytes: limit }) =>
+      new Error(`Twilio SMS API response body too large: ${size} bytes (limit: ${limit} bytes)`),
+  });
+  return new TextDecoder().decode(body);
+}
+
 function normalizeRequestHeaders(headers: HeadersInit | undefined): Record<string, string> {
   if (!headers) {
     return {};
@@ -298,7 +345,7 @@ async function requestTwilioApi(params: {
     return {
       ok: response.ok,
       status: response.status,
-      text: await response.text(),
+      text: await readTwilioApiResponseText(response),
     };
   }
 
@@ -314,7 +361,7 @@ async function requestTwilioApi(params: {
     return {
       ok: guarded.response.ok,
       status: guarded.response.status,
-      text: await guarded.response.text(),
+      text: await readTwilioApiResponseText(guarded.response),
     };
   } finally {
     await guarded.release();
@@ -366,7 +413,12 @@ function parseTwilioListPayload<T>(
   if (!text.trim()) {
     return [];
   }
-  const parsed: unknown = JSON.parse(text);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
   if (!parsed || typeof parsed !== "object") {
     return [];
   }
@@ -424,7 +476,12 @@ export async function retrieveTwilioMessagingService(params: {
   if (!response.ok) {
     throw new TwilioSmsApiError(response.status, response.text, "messaging-service lookup");
   }
-  const parsed: unknown = JSON.parse(response.text);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(response.text);
+  } catch {
+    throw new Error("Twilio Messaging Service lookup returned malformed JSON.");
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("Twilio Messaging Service lookup returned malformed JSON.");
   }

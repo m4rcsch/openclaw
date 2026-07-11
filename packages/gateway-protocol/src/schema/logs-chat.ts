@@ -32,6 +32,7 @@ export const ChatHistoryParamsSchema = Type.Object(
     sessionKey: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
+    offset: Type.Optional(Type.Integer({ minimum: 0 })),
     maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
   },
   { additionalProperties: false },
@@ -44,6 +45,41 @@ export const ChatMetadataParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+/** Batched purpose-title request for tool calls rendered in the Control UI. */
+export const ChatToolTitlesParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    items: Type.Array(
+      Type.Object(
+        {
+          id: Type.String({ minLength: 1, maxLength: 64 }),
+          name: Type.String({ minLength: 1, maxLength: 200 }),
+          input: Type.String({ minLength: 1, maxLength: 4_000 }),
+        },
+        { additionalProperties: false },
+      ),
+      { minItems: 1, maxItems: 24 },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+/**
+ * Titles keyed by the caller-provided item id; missing ids mean no title.
+ * `disabled: true` tells clients the gateway has tool titles switched off so
+ * they stop requesting for the rest of the session.
+ */
+export const ChatToolTitlesResultSchema = Type.Object(
+  {
+    titles: Type.Record(Type.String(), Type.String()),
+    disabled: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+/** Typed result shape for tool-title consumers. */
+export type ChatToolTitlesResult = Static<typeof ChatToolTitlesResultSchema>;
 
 /** Fetches one stored chat message without forcing history callers to request huge payloads. */
 export const ChatMessageGetParamsSchema = Type.Object(
@@ -82,7 +118,9 @@ export const ChatSendParamsSchema = Type.Object(
     sessionId: Type.Optional(NonEmptyString),
     message: Type.String(),
     thinking: Type.Optional(Type.String()),
-    fastMode: Type.Optional(Type.Boolean()),
+    fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
+    // One-turn override for auto fast-mode cutoff seconds.
+    fastAutoOnSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
     deliver: Type.Optional(Type.Boolean()),
     originatingChannel: Type.Optional(Type.String()),
     originatingTo: Type.Optional(Type.String()),
@@ -93,6 +131,7 @@ export const ChatSendParamsSchema = Type.Object(
     systemInputProvenance: Type.Optional(InputProvenanceSchema),
     systemProvenanceReceipt: Type.Optional(Type.String()),
     suppressCommandInterpretation: Type.Optional(Type.Boolean()),
+    expectedSessionRoutingContract: Type.Optional(NonEmptyString),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },
@@ -104,6 +143,7 @@ export const ChatAbortParamsSchema = Type.Object(
     sessionKey: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     runId: Type.Optional(NonEmptyString),
+    preserveSideRuns: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -168,6 +208,7 @@ export const ChatAbortedEventSchema = Type.Object(
     ...ChatEventBaseSchema,
     state: Type.Literal("aborted"),
     message: Type.Optional(Type.Unknown()),
+    errorMessage: Type.Optional(Type.String()),
     stopReason: Type.Optional(Type.String()),
   },
   { additionalProperties: false },

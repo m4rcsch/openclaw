@@ -1,7 +1,12 @@
 // Gateway Network Client tests cover gateway network client script behavior.
 import { EventEmitter } from "node:events";
-import { describe, expect, it } from "vitest";
-import { runGatewayNetworkClient } from "../../scripts/e2e/lib/gateway-network/client.mjs";
+import { describe, expect, it, vi } from "vitest";
+import {
+  assertGatewaySuspendingError,
+  assertReadySuspensionResponse,
+  assertSuspendedProbes,
+  runGatewayNetworkClient,
+} from "../../scripts/e2e/lib/gateway-network/client.mjs";
 import { readGatewayNetworkClientConnectTimeoutMs } from "../../scripts/e2e/lib/gateway-network/limits.mjs";
 import { onceFrame } from "../../scripts/e2e/lib/gateway-network/ws-frames.mjs";
 
@@ -126,7 +131,11 @@ describe("gateway network WebSocket open guard", () => {
       stdout,
       deps: {
         delay: async () => {},
-        onceFrame: async (_ws: unknown, predicate: (frame: unknown) => boolean) => {
+        onceFrame: async (
+          _ws: unknown,
+          predicate: (frame: unknown) => boolean,
+          _timeoutMs?: number,
+        ) => {
           const frame = {
             type: "res",
             id: sentMethods.at(-1) === "connect" ? "c1" : "h1",
@@ -155,6 +164,59 @@ describe("gateway network WebSocket open guard", () => {
     expect(harness.sentMethods).toEqual(["connect", "health"]);
     expect(harness.stdout).toEqual(["ok"]);
     expect(harness.closeCount).toBe(1);
+  });
+
+  it("bounds socket and frame waits by the client deadline", async () => {
+    const harness = createNetworkClientHarness([{ ok: true }, healthResponse()]);
+    const openSocket = vi.fn(harness.deps.openSocket);
+    const onceFrame = vi.fn(harness.deps.onceFrame);
+
+    await runGatewayNetworkClient(
+      { token: "secret-token", url: "ws://127.0.0.1:12345", timeoutMs: 250 },
+      {
+        ...harness.deps,
+        onceFrame,
+        openSocket,
+      },
+    );
+
+    expect(openSocket.mock.calls[0]?.[1]).toBeGreaterThan(0);
+    expect(openSocket.mock.calls[0]?.[1]).toBeLessThanOrEqual(250);
+    expect(onceFrame.mock.calls.map((call) => call[2])).toHaveLength(2);
+    for (const frameTimeoutMs of onceFrame.mock.calls.map((call) => call[2])) {
+      expect(frameTimeoutMs).toBeGreaterThan(0);
+      expect(frameTimeoutMs).toBeLessThanOrEqual(250);
+    }
+  });
+
+  it("does not sleep past the remaining client deadline between retries", async () => {
+    const delays: number[] = [];
+    let now = 1_000;
+
+    const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      await expect(
+        runGatewayNetworkClient(
+          { token: "secret-token", url: "ws://127.0.0.1:12345", timeoutMs: 250 },
+          {
+            delay: async (ms: number) => {
+              delays.push(ms);
+              now += ms;
+            },
+            openSocket: async () => {
+              now += 200;
+              throw new Error("ECONNREFUSED");
+            },
+            protocolVersion: 1,
+            stdout: () => {},
+          },
+        ),
+      ).rejects.toThrow("ECONNREFUSED");
+    } finally {
+      dateSpy.mockRestore();
+    }
+
+    expect(delays).toEqual([50]);
   });
 
   it("fails a connected socket whose health success lacks summary evidence", async () => {
@@ -187,5 +249,58 @@ describe("gateway network WebSocket open guard", () => {
 
     expect(harness.sentMethods).toEqual(["connect", "health"]);
     expect(harness.closeCount).toBe(1);
+  });
+
+  it("accepts only an idle future suspension lease", () => {
+    const payload = {
+      status: "ready",
+      suspensionId: "lease-1",
+      expiresAtMs: 2_000,
+      activeCount: 0,
+      blockers: [],
+    };
+    const response = (overrides = {}) => ({
+      status: 200,
+      body: { ok: true, payload: { ...payload, ...overrides } },
+    });
+
+    expect(assertReadySuspensionResponse(response(), 1_000)).toEqual(payload);
+    expect(() => assertReadySuspensionResponse(response({ expiresAtMs: 999 }), 1_000)).toThrow(
+      "expire in the future",
+    );
+    expect(() => assertReadySuspensionResponse(response({ activeCount: 1 }), 1_000)).toThrow(
+      "no active work",
+    );
+  });
+
+  it("requires canonical prepared-suspension RPC and probe evidence", () => {
+    const suspendedError = {
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        retryable: true,
+        details: { reason: "gateway-suspending", phase: "prepared" },
+      },
+    };
+    const health = { status: 200, body: { ok: true, status: "live" } };
+    const readiness = { status: 503, body: { ready: false, failing: ["gateway-draining"] } };
+
+    expect(() => assertGatewaySuspendingError(suspendedError)).not.toThrow();
+    expect(() => assertSuspendedProbes(health, readiness)).not.toThrow();
+    expect(() =>
+      assertGatewaySuspendingError({
+        ...suspendedError,
+        error: {
+          ...suspendedError.error,
+          details: { reason: "gateway-restarting", phase: "prepared" },
+        },
+      }),
+    ).toThrow("identify gateway suspension");
+    expect(() =>
+      assertSuspendedProbes(health, {
+        status: 503,
+        body: { ready: false, failing: ["channels"] },
+      }),
+    ).toThrow("identify gateway-draining");
   });
 });

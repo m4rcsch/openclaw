@@ -25,10 +25,8 @@ vi.mock("../../utils/provider-utils.js", () => ({
 const {
   buildThreadingToolContext,
   buildEmbeddedRunBaseParams,
-  buildEmbeddedRunContexts,
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
-  resolveEnforceFinalTag,
   resolveProviderScopedAuthProfile,
 } = await import("./agent-runner-utils.js");
 
@@ -109,6 +107,15 @@ describe("agent-runner-utils", () => {
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
   });
 
+  it("disables model fallback options for a model-locked run", () => {
+    const run = makeRun({ modelSelectionLocked: true });
+
+    const resolved = resolveModelFallbackOptions(run);
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+    expect(resolved.fallbacksOverride).toEqual([]);
+  });
+
   it("passes through missing agentId for helper-based fallback resolution", () => {
     hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
     const run = makeRun({ agentId: undefined });
@@ -130,6 +137,7 @@ describe("agent-runner-utils", () => {
     const run = makeRun({
       enforceFinalTag: true,
       cwd: "/tmp/task-repo",
+      taskSuggestionDeliveryMode: "gateway",
     });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
@@ -167,6 +175,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.timeoutMs).toBe(run.timeoutMs);
     expect(resolved.runId).toBe("run-1");
     expect(resolved.promptCacheKey).toBe("webchat-cache-key");
+    expect(resolved.taskSuggestionDeliveryMode).toBe("gateway");
   });
 
   it("threads prompt cache affinity through embedded execution params", () => {
@@ -232,10 +241,42 @@ describe("agent-runner-utils", () => {
     expect(resolved.modelFallbacksOverride).toEqual(["fallback-model"]);
   });
 
-  it("does not force final-tag enforcement for minimax providers", () => {
-    const run = makeRun();
+  it("disables embedded model fallbacks for a model-locked run", () => {
+    const run = makeRun({ modelSelectionLocked: true });
+    const authProfile = resolveProviderScopedAuthProfile({
+      provider: "openai",
+      primaryProvider: "openai",
+    });
 
-    expect(resolveEnforceFinalTag(run, "minimax", "MiniMax-M2.7")).toBe(false);
+    const resolved = buildEmbeddedRunBaseParams({
+      run,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+      authProfile,
+    });
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+    expect(resolved.modelFallbacksOverride).toEqual([]);
+    expect(resolved.modelSelectionLocked).toBe(true);
+  });
+
+  it("does not force final-tag enforcement for minimax providers", () => {
+    const run = makeRun({ enforceFinalTag: false });
+    const authProfile = resolveProviderScopedAuthProfile({
+      provider: "minimax",
+      primaryProvider: "minimax",
+    });
+
+    const resolved = buildEmbeddedRunBaseParams({
+      run,
+      provider: "minimax",
+      model: "MiniMax-M2.7",
+      runId: "run-1",
+      authProfile,
+    });
+
+    expect(resolved.enforceFinalTag).toBe(false);
     expect(hoisted.isReasoningTagProviderMock).toHaveBeenCalledWith("minimax", {
       config: run.config,
       workspaceDir: run.workspaceDir,
@@ -250,33 +291,43 @@ describe("agent-runner-utils", () => {
       chatType: "direct",
     });
 
-    const resolved = buildEmbeddedRunContexts({
+    const resolved = buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "OpenAI",
         To: "channel-1",
         ChatType: "Channel",
+        NativeChannelId: "native-chat-1",
         SenderId: "sender-1",
+        ChannelContext: {
+          sender: { id: "sender-1", providerUserId: "provider-user-1" },
+          chat: { id: "native-chat-1", topicId: "topic-1" },
+        },
         MemberRoleIds: ["admin", " ", "operator"],
       },
       hasRepliedRef: undefined,
       provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      runId: "run-1",
     });
 
-    expect(resolved.authProfile).toEqual({
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    });
+    expect(resolved.runBaseParams.authProfileId).toBeUndefined();
+    expect(resolved.runBaseParams.authProfileIdSource).toBeUndefined();
     expect(resolved.embeddedContext.sessionId).toBe(run.sessionId);
     expect(resolved.embeddedContext.sessionKey).toBe(run.sessionKey);
     expect(resolved.embeddedContext.agentId).toBe(run.agentId);
     expect(resolved.embeddedContext.messageProvider).toBe("openai");
     expect(resolved.embeddedContext.chatType).toBe("channel");
     expect(resolved.embeddedContext.messageTo).toBe("channel-1");
+    expect(resolved.embeddedContext.chatId).toBe("native-chat-1");
     expect(resolved.embeddedContext.memberRoleIds).toEqual(["admin", "operator"]);
     expect(resolved.embeddedContext.currentInboundAudio).toBe(false);
     expect(resolved.senderContext).toEqual({
       senderId: "sender-1",
+      channelContext: {
+        sender: { id: "sender-1", providerUserId: "provider-user-1" },
+        chat: { id: "native-chat-1", topicId: "topic-1" },
+      },
       senderName: undefined,
       senderUsername: undefined,
       senderE164: undefined,
@@ -286,7 +337,7 @@ describe("agent-runner-utils", () => {
   it("prefers OriginatingChannel over Provider for messageProvider", () => {
     const run = makeRun({ agentAccountId: "work", chatType: "group" });
 
-    const resolved = buildEmbeddedRunContexts({
+    const resolved = buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "heartbeat",
@@ -295,6 +346,8 @@ describe("agent-runner-utils", () => {
       },
       hasRepliedRef: undefined,
       provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
     });
 
     expect(resolved.embeddedContext.messageProvider).toBe("telegram");
@@ -321,7 +374,7 @@ describe("agent-runner-utils", () => {
     });
     const run = makeRun({ agentAccountId: "work", chatType: "direct" });
 
-    const resolved = buildEmbeddedRunContexts({
+    const resolved = buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "cron-event",
@@ -335,6 +388,8 @@ describe("agent-runner-utils", () => {
       },
       hasRepliedRef: undefined,
       provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
     });
 
     expect(resolved.embeddedContext.messageProvider).toBe("slack");
@@ -349,7 +404,7 @@ describe("agent-runner-utils", () => {
   it("carries inbound audio context into embedded message tools", () => {
     const run = makeRun();
 
-    const resolved = buildEmbeddedRunContexts({
+    const resolved = buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "telegram",
@@ -359,6 +414,8 @@ describe("agent-runner-utils", () => {
       },
       hasRepliedRef: undefined,
       provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
     });
 
     expect(resolved.embeddedContext.currentInboundAudio).toBe(true);

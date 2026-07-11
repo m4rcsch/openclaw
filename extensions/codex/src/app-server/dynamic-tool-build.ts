@@ -59,7 +59,7 @@ const CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS = [
 const CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW = new Set(["read", "write"]);
 const CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME = "node_exec";
 const CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME = "node_process";
-const CODEX_NODE_EXEC_HIDDEN_PARAMETER_NAMES = new Set(["host", "security", "ask", "node"]);
+const CODEX_NODE_EXEC_POLICY_PARAMETER_NAMES = new Set(["host", "security", "ask"]);
 
 /** Runtime inputs needed to derive the exact Codex dynamic tool surface for a turn. */
 export type DynamicToolBuildParams = {
@@ -76,11 +76,17 @@ export type DynamicToolBuildParams = {
   pluginConfig: CodexPluginConfig;
   profilerEnabled?: boolean;
   forceHeartbeatTool?: boolean;
+  ignoreDisableMessageTool?: boolean;
   ignoreRuntimePlan?: boolean;
   onYieldDetected: () => void;
   onCodexAppServerEvent?: (event: CodexDynamicToolBuildEvent) => void;
   onPersistentWebSearchPolicyResolved?: (allowed: boolean) => void;
   onWebSearchPolicyResolved?: (allowed: boolean) => void;
+  computerContextEpoch?: {
+    value: number;
+    frameToolCallId?: string;
+    frameImageIdentity?: string;
+  };
 };
 
 let openClawCodingToolsFactoryForTests: OpenClawCodingToolsFactory | undefined;
@@ -203,6 +209,9 @@ export function formatCodexDynamicToolBuildStageSummary(
 /** Builds, filters, and normalizes Codex-compatible runtime tools for a single turn. */
 export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const { params } = input;
+  const messagePolicyParams = input.ignoreDisableMessageTool
+    ? { ...params, disableMessageTool: false }
+    : params;
   if (params.disableTools) {
     input.onWebSearchPolicyResolved?.(false);
     return [];
@@ -227,6 +236,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
   const allTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
+    ...(params.crestodianTool ? { crestodianTool: params.crestodianTool } : {}),
     ...buildEmbeddedAttemptToolRunContext(params),
     exec: {
       ...params.execOverrides,
@@ -237,9 +247,15 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     sandbox: input.sandbox,
     messageProvider: resolveCodexMessageToolProvider(params),
     toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,
+    // Capability-gated tools (requiredClientCaps) need the originating client's
+    // declared caps in this sibling harness too, not only the embedded runner.
+    clientCaps: params.clientCaps,
+    chatType: params.chatType,
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,
+    nativeChannelId: params.chatId,
+    messageActionTurnCapability: params.messageActionTurnCapability,
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
@@ -248,11 +264,13 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding:
       params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
     ...sessionKeys,
     sessionId: params.sessionId,
     runId: params.runId,
+    approvalReviewerDeviceId: params.approvalReviewerDeviceId,
     agentDir,
     cwd: input.effectiveCwd ?? input.effectiveWorkspace,
     workspaceDir: input.effectiveWorkspace,
@@ -292,11 +310,12 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     replyToMode: params.replyToMode,
     hasRepliedRef: params.hasRepliedRef,
     modelHasVision,
+    computerContextEpoch: input.computerContextEpoch,
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    disableMessageTool: params.disableMessageTool,
-    forceMessageTool: shouldForceMessageTool(params),
+    disableMessageTool: input.ignoreDisableMessageTool ? false : params.disableMessageTool,
+    forceMessageTool: shouldForceMessageTool(messagePolicyParams),
     enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
     forceHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
     onYield: (message) => {
@@ -375,7 +394,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         transientWebSearchRestriction &&
         webSearchPolicy.persistentAllowed),
   );
-  const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
+  const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, messagePolicyParams);
   const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
   toolBuildStages.mark("allowlist-filter");
   const normalizedTools = normalizeAgentRuntimeTools({
@@ -581,12 +600,59 @@ export function resolveCodexSandboxEnvironmentSelection(
 /** Chooses the cwd visible to Codex native execution after sandbox exec-server setup. */
 export function resolveCodexAppServerExecutionCwd(params: {
   effectiveCwd: string;
+  localWorkspaceRoot: string;
   environment?: CodexSandboxExecEnvironment;
   nativeToolSurfaceEnabled: boolean;
+  remoteWorkspaceRoot?: string;
 }): string {
-  return params.environment && params.nativeToolSurfaceEnabled
-    ? params.environment.cwd
-    : params.effectiveCwd;
+  const cwd =
+    params.environment && params.nativeToolSurfaceEnabled
+      ? params.environment.cwd
+      : params.effectiveCwd;
+  return mapCodexAppServerRemoteWorkspacePath({
+    value: cwd,
+    localWorkspaceRoot: params.localWorkspaceRoot,
+    remoteWorkspaceRoot: params.remoteWorkspaceRoot,
+  });
+}
+
+/** Projects a local OpenClaw workspace cwd into the remote Codex app-server workspace root. */
+export function mapCodexAppServerRemoteWorkspacePath(params: {
+  value: string;
+  localWorkspaceRoot: string;
+  remoteWorkspaceRoot?: string;
+}): string {
+  if (!params.remoteWorkspaceRoot) {
+    return params.value;
+  }
+  const localRoot = normalizeRemoteWorkspaceMatchPath(params.localWorkspaceRoot);
+  const remoteRoot = normalizeRemoteWorkspaceMatchPath(params.remoteWorkspaceRoot);
+  const normalizedValue = normalizeRemoteWorkspaceMatchPath(params.value);
+  if (!localRoot || !remoteRoot) {
+    throw new Error("Codex remoteWorkspaceRoot requires non-empty workspace roots.");
+  }
+  if (normalizedValue === localRoot) {
+    return remoteRoot;
+  }
+  const prefix = `${localRoot}/`;
+  if (!normalizedValue.startsWith(prefix)) {
+    throw new Error(
+      `Codex remoteWorkspaceRoot is configured but cwd ${params.value} is outside OpenClaw workspace root ${params.localWorkspaceRoot}; refusing to send a gateway-local cwd to the remote Codex app-server.`,
+    );
+  }
+  return joinRemoteWorkspacePath(remoteRoot, normalizedValue.slice(prefix.length));
+}
+
+function normalizeRemoteWorkspaceMatchPath(value: string): string {
+  return trimTrailingPathSeparator(value.replace(/\\/gu, "/"));
+}
+
+function trimTrailingPathSeparator(value: string): string {
+  return value.length > 1 ? value.replace(/[\\/]+$/u, "") : value;
+}
+
+function joinRemoteWorkspacePath(remoteRoot: string, suffix: string): string {
+  return remoteRoot === "/" ? `/${suffix}` : `${remoteRoot}/${suffix}`;
 }
 
 /** Converts OpenClaw sandbox networking into Codex's external-sandbox policy shape. */
@@ -609,7 +675,7 @@ function codexNetworkAccessForOpenClawSandbox(
   return Boolean(network && network !== "none");
 }
 
-/** Returns a Codex config copy with app-server Codex plugin loading disabled for thread tools. */
+/** Returns a Codex config copy with all app exposure disabled for restricted thread tools. */
 export function disableCodexPluginThreadConfig(pluginConfig?: unknown): CodexPluginConfig {
   const config = readCodexPluginConfig(pluginConfig);
   return {
@@ -709,7 +775,10 @@ function addNodeShellDynamicToolsIfNeeded(
   if (isCodexMemoryFlushRun(input.params)) {
     return filteredTools;
   }
-  if (nodePolicy.effectiveExecHost !== "node") {
+  const nodeExecIsDefault = nodePolicy.effectiveExecHost === "node";
+  const nodeExecAvailableFromAuto =
+    nodePolicy.requestedExecHost === "auto" && nodePolicy.effectiveExecHost === "gateway";
+  if (!nodeExecIsDefault && !nodeExecAvailableFromAuto) {
     return filteredTools;
   }
   const execTool = allTools.find((tool) => normalizeCodexDynamicToolName(tool.name) === "exec");
@@ -746,16 +815,20 @@ function createNodeExecDynamicTool(
   execTool: OpenClawDynamicTool,
   configuredNode: string | undefined,
 ): OpenClawDynamicTool {
+  const pinnedNode = configuredNode?.trim();
   return {
     ...execTool,
     name: CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
-    description:
-      "Run a shell command on the OpenClaw configured remote node for this session. This tool always uses OpenClaw host=node internally and follows the existing node exec approval and allowlist policy. Use node_process for follow-up on backgrounded node_exec sessions. Use Codex's native shell for local app-server work.",
-    parameters: hideNodeExecDynamicToolParameters(execTool.parameters),
+    description: pinnedNode
+      ? "Run a shell command on the OpenClaw configured remote node for this session. This tool always uses OpenClaw host=node internally and follows the existing node exec approval and allowlist policy. Use node_process for follow-up on backgrounded node_exec sessions. Use Codex's native shell for local app-server work."
+      : "Run a shell command on an OpenClaw remote node. Select the node by name or id when multiple nodes are available. This tool always uses OpenClaw host=node internally and follows the existing node exec approval and allowlist policy. Use node_process for follow-up on backgrounded node_exec sessions. Use Codex's native shell for local app-server work.",
+    parameters: hideNodeExecDynamicToolParameters(execTool.parameters, {
+      hideNode: Boolean(pinnedNode),
+    }),
     execute: async (toolCallId, args, signal, onUpdate) => {
       const result = await execTool.execute(
         toolCallId,
-        pinNodeExecDynamicToolArgs(args, configuredNode),
+        pinNodeExecDynamicToolArgs(args, pinnedNode),
         signal,
         onUpdate,
       );
@@ -781,7 +854,7 @@ function createNodeProcessDynamicTool(processTool: OpenClawDynamicTool): OpenCla
     ...processTool,
     name: CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME,
     description:
-      "Manage node_exec sessions that were started on the OpenClaw configured remote node for this session: list, poll, log, write, send-keys, submit, paste, kill, clear, or remove. Use only for node_exec follow-up; use Codex's native shell session handling for local app-server work.",
+      "Manage node_exec sessions that were started on OpenClaw remote nodes: list, poll, log, write, send-keys, submit, paste, kill, clear, or remove. Use only for node_exec follow-up; use Codex's native shell session handling for local app-server work.",
   };
 }
 
@@ -790,8 +863,8 @@ function pinNodeExecDynamicToolArgs(args: unknown, configuredNode: string | unde
     args && typeof args === "object" && !Array.isArray(args)
       ? (args as Record<string, unknown>)
       : {};
-  const { host: _host, security: _security, ask: _ask, node: _node, ...rest } = source;
-  const node = configuredNode?.trim();
+  const { host: _host, security: _security, ask: _ask, node: requestedNode, ...rest } = source;
+  const node = configuredNode ?? (typeof requestedNode === "string" ? requestedNode.trim() : "");
   return {
     ...rest,
     host: "node",
@@ -799,7 +872,10 @@ function pinNodeExecDynamicToolArgs(args: unknown, configuredNode: string | unde
   };
 }
 
-function hideNodeExecDynamicToolParameters(parameters: OpenClawDynamicTool["parameters"]) {
+function hideNodeExecDynamicToolParameters(
+  parameters: OpenClawDynamicTool["parameters"],
+  options: { hideNode: boolean },
+) {
   if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
     return parameters;
   }
@@ -810,7 +886,9 @@ function hideNodeExecDynamicToolParameters(parameters: OpenClawDynamicTool["para
   }
   const nextProperties = Object.fromEntries(
     Object.entries(rawProperties).filter(
-      ([name]) => !CODEX_NODE_EXEC_HIDDEN_PARAMETER_NAMES.has(normalizeCodexDynamicToolName(name)),
+      ([name]) =>
+        !CODEX_NODE_EXEC_POLICY_PARAMETER_NAMES.has(normalizeCodexDynamicToolName(name)) &&
+        !(options.hideNode && normalizeCodexDynamicToolName(name) === "node"),
     ),
   );
   const rawRequired = schema.required;
@@ -818,7 +896,8 @@ function hideNodeExecDynamicToolParameters(parameters: OpenClawDynamicTool["para
     ? rawRequired.filter(
         (name) =>
           typeof name !== "string" ||
-          !CODEX_NODE_EXEC_HIDDEN_PARAMETER_NAMES.has(normalizeCodexDynamicToolName(name)),
+          (!CODEX_NODE_EXEC_POLICY_PARAMETER_NAMES.has(normalizeCodexDynamicToolName(name)) &&
+            !(options.hideNode && normalizeCodexDynamicToolName(name) === "node")),
       )
     : rawRequired;
   return {

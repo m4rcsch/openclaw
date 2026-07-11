@@ -1,14 +1,13 @@
 // Session key isolation tests cover separate keys for concurrent cron runs.
 import { describe, expect, it } from "vitest";
-import {
-  makeIsolatedAgentTurnJob,
-  makeIsolatedAgentTurnParams,
-  setupRunCronIsolatedAgentTurnSuite,
-} from "./run.suite-helpers.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   isCliProviderMock,
+  loadSessionEntryMock,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
+  makeCronSessionEntry,
   mockRunCronFallbackPassthrough,
   resolveCronSessionMock,
   runCliAgentMock,
@@ -26,7 +25,7 @@ function requireFirstMockArg(mock: { mock: { calls: unknown[][] } }, label: stri
 }
 
 describe("runCronIsolatedAgentTurn isolated session identity", () => {
-  setupRunCronIsolatedAgentTurnSuite();
+  setupRunCronIsolatedAgentTurnSuite({ fast: true });
 
   it("uses a run-scoped key for embedded isolated cron execution", async () => {
     resolveCronSessionMock.mockReturnValue(
@@ -40,9 +39,9 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     mockRunCronFallbackPassthrough();
 
     const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
+      makeIsolatedAgentParamsFixture({
         sessionKey: "cron:daily-monitor",
-        job: makeIsolatedAgentTurnJob({
+        job: makeIsolatedAgentJobFixture({
           payload: {
             kind: "agentTurn",
             message: "test",
@@ -98,9 +97,9 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       );
     mockRunCronFallbackPassthrough();
 
-    const params = makeIsolatedAgentTurnParams({
+    const params = makeIsolatedAgentParamsFixture({
       sessionKey: "cron:daily-monitor",
-      job: makeIsolatedAgentTurnJob({
+      job: makeIsolatedAgentJobFixture({
         payload: {
           kind: "agentTurn",
           message: "test",
@@ -138,9 +137,9 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     mockRunCronFallbackPassthrough();
 
     const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
+      makeIsolatedAgentParamsFixture({
         sessionKey: "project-alpha-monitor",
-        job: makeIsolatedAgentTurnJob({
+        job: makeIsolatedAgentJobFixture({
           sessionTarget: "session:project-alpha-monitor",
         }),
       }),
@@ -163,6 +162,110 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(runRequest.bootstrapContextRunKind).toBe("cron");
   });
 
+  it.each([
+    "harness:codex:supervision:native-thread",
+    "agent:default:harness:codex:supervision:native-thread",
+  ])("rejects detached execution for a missing reserved harness key %s", async (sessionKey) => {
+    await expect(
+      runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          sessionKey,
+          job: makeIsolatedAgentJobFixture({ sessionTarget: `session:${sessionKey}` }),
+        }),
+      ),
+    ).rejects.toThrow(/reserved for agent harness-owned sessions/i);
+
+    expect(resolveCronSessionMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("continues a pre-existing unlocked harness-prefixed session as an ordinary session", async () => {
+    const sessionKey = "agent:default:harness:legacy-notes";
+    const legacyEntry = makeCronSessionEntry({
+      agentHarnessId: "codex",
+      sessionId: "legacy-session",
+    });
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        initialSessionEntry: legacyEntry,
+        isNewSession: false,
+        sessionEntry: { ...legacyEntry },
+        store: { [sessionKey]: { ...legacyEntry } },
+      }),
+    );
+    loadSessionEntryMock.mockReturnValue(legacyEntry);
+    mockRunCronFallbackPassthrough();
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        sessionKey,
+        job: makeIsolatedAgentJobFixture({ sessionTarget: `session:${sessionKey}` }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.sessionKey).toBe(sessionKey);
+    expect(resolveCronSessionMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects detached execution for an existing locked harness session", async () => {
+    const sessionKey = "agent:default:harness:codex:supervision:native-thread";
+    const protectedEntry = makeCronSessionEntry({
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      sessionId: "native-session",
+    });
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        initialSessionEntry: protectedEntry,
+        isNewSession: false,
+        sessionEntry: protectedEntry,
+        store: { [sessionKey]: protectedEntry },
+      }),
+    );
+
+    await expect(
+      runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          sessionKey,
+          job: makeIsolatedAgentJobFixture({ sessionTarget: `session:${sessionKey}` }),
+        }),
+      ),
+    ).rejects.toThrow(/reserved for agent harness-owned sessions/i);
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects detached execution for an existing locked ordinary session", async () => {
+    const sessionKey = "agent:default:project-native-session";
+    const protectedEntry = makeCronSessionEntry({
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      sessionId: "native-session",
+    });
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        initialSessionEntry: protectedEntry,
+        isNewSession: false,
+        sessionEntry: protectedEntry,
+        store: { [sessionKey]: protectedEntry },
+      }),
+    );
+
+    await expect(
+      runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          sessionKey,
+          job: makeIsolatedAgentJobFixture({ sessionTarget: `session:${sessionKey}` }),
+        }),
+      ),
+    ).rejects.toThrow(/identity is locked and cannot be replaced or shared/i);
+
+    expect(resolveCronSessionMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
   it("uses a run-scoped key for CLI isolated cron execution", async () => {
     isCliProviderMock.mockReturnValue(true);
     resolveCronSessionMock.mockReturnValue(
@@ -180,9 +283,9 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     });
 
     const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
+      makeIsolatedAgentParamsFixture({
         sessionKey: "cron:cli-monitor",
-        job: makeIsolatedAgentTurnJob({
+        job: makeIsolatedAgentJobFixture({
           payload: {
             kind: "agentTurn",
             message: "test",
@@ -201,6 +304,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       promptCacheKey?: string;
       bootstrapContextMode?: string;
       bootstrapContextRunKind?: string;
+      cleanupCliLiveSessionOnRunEnd?: boolean;
     };
     expect(runRequest.sessionId).toBe("isolated-cli-run-1");
     expect(runRequest.sessionKey).toBe("agent:default:cron:cli-monitor:run:isolated-cli-run-1");
@@ -208,6 +312,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(runRequest.promptCacheKey).toBeUndefined();
     expect(runRequest.bootstrapContextMode).toBe("lightweight");
     expect(runRequest.bootstrapContextRunKind).toBe("cron");
+    expect(runRequest.cleanupCliLiveSessionOnRunEnd).toBe(true);
   });
 
   it("runs externally sourced CLI hook turns", async () => {
@@ -219,9 +324,9 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     });
 
     const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
+      makeIsolatedAgentParamsFixture({
         sessionKey: "hook:webhook:cli-monitor",
-        job: makeIsolatedAgentTurnJob({
+        job: makeIsolatedAgentJobFixture({
           payload: {
             kind: "agentTurn",
             message: "test",

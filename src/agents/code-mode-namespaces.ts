@@ -4,6 +4,7 @@
  * files, and a guarded invocation runtime.
  */
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
+import { toCodeModeJsonSafe } from "./code-mode-json.js";
 
 const FORBIDDEN_NAMESPACE_PATH_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
 const NAMESPACE_PATH_KEY_SEPARATOR = "\u0000";
@@ -573,6 +574,7 @@ export type CodeModeApiVirtualFile = {
   path: string;
   description?: string;
   content: string;
+  bytes: number;
 };
 
 function buildMcpParamDocs(schema: unknown): McpApiParamDoc[] {
@@ -871,18 +873,22 @@ export function createCodeModeApiVirtualFiles(
   if (!model) {
     return [];
   }
+  const rootContent = renderMcpRootFile(model.docs);
   const files: CodeModeApiVirtualFile[] = [
     {
       path: "mcp/index.d.ts",
       description: "Root MCP namespace declaration and server list.",
-      content: renderMcpRootFile(model.docs),
+      content: rootContent,
+      bytes: Buffer.byteLength(rootContent, "utf8"),
     },
   ];
   for (const server of model.docs) {
+    const content = renderMcpServerHeader(server, server.tools);
     files.push({
       path: `mcp/${server.identifier}.d.ts`,
       description: `MCP server declaration for ${server.serverName}.`,
-      content: renderMcpServerHeader(server, server.tools),
+      content,
+      bytes: Buffer.byteLength(content, "utf8"),
     });
   }
   return files;
@@ -965,35 +971,6 @@ export function describeCodeModeNamespacesForPrompt(
   return lines.join("\n");
 }
 
-function toJsonSafe(value: unknown): unknown {
-  if (value === undefined) {
-    return null;
-  }
-  try {
-    const serialized = JSON.stringify(value);
-    return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
-  } catch {
-    if (value instanceof Error) {
-      return { name: value.name, message: value.message };
-    }
-    if (value === null) {
-      return null;
-    }
-    switch (typeof value) {
-      case "string":
-      case "number":
-      case "boolean":
-        return value;
-      case "bigint":
-      case "symbol":
-      case "function":
-        return String(value);
-      default:
-        return Object.prototype.toString.call(value);
-    }
-  }
-}
-
 function assertNamespacePathSegment(segment: string): void {
   if (
     !segment ||
@@ -1024,7 +1001,7 @@ function serializeNamespaceScopeValue(
     );
   }
   if (value === null || typeof value !== "object") {
-    return { kind: "value", value: toJsonSafe(value) };
+    return { kind: "value", value: toCodeModeJsonSafe(value) };
   }
   if (stack.has(value)) {
     throw new Error(`Circular code mode namespace scope at ${path.join(".") || "(root)"}.`);
@@ -1130,12 +1107,12 @@ export async function createCodeModeNamespaceRuntime(
       }
       const input = target.input ? await target.input(args) : (args[0] ?? {});
       if (target.local) {
-        return toJsonSafe(input);
+        return toCodeModeJsonSafe(input);
       }
       if (!target.catalogId && !entry.registration.requiredToolNames.includes(target.toolName)) {
         throw new Error(`Code mode namespace path targets undeclared tool: ${target.toolName}`);
       }
-      return toJsonSafe(
+      return toCodeModeJsonSafe(
         await executeTool({
           pluginId: entry.registration.pluginId,
           toolName: target.toolName,

@@ -5,7 +5,6 @@ export {
   DEFAULT_LOCAL_MODEL,
   getBuiltinMemoryEmbeddingProviderDoctorMetadata,
   listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata,
-  registerBuiltInMemoryEmbeddingProviders,
 } from "./src/memory/provider-adapters.js";
 export { createEmbeddingProvider } from "./src/memory/embeddings.js";
 export {
@@ -18,6 +17,7 @@ export { checkQmdBinaryAvailability } from "openclaw/plugin-sdk/memory-core-host
 export { hasConfiguredMemorySecretInput } from "openclaw/plugin-sdk/memory-core-host-secret";
 export { auditDreamingArtifacts, repairDreamingArtifacts } from "./src/dreaming-repair.js";
 export { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
+export { configureMemoryCoreEmbeddingLocalService } from "./src/memory/embedding-local-service.js";
 export {
   auditShortTermPromotionArtifacts,
   loadShortTermPromotionDreamingStats,
