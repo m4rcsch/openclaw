@@ -299,8 +299,7 @@ function readGatewayServiceCommandPortState(
   if (!programArguments || programArguments.length === 0) {
     return { kind: "missing" };
   }
-  for (let index = 0; index < programArguments.length; index += 1) {
-    const arg = programArguments[index];
+  for (const [index, arg] of programArguments.entries()) {
     if (arg === "--port") {
       return parseGatewayPortArg(programArguments[index + 1]);
     }
@@ -563,7 +562,7 @@ async function auditGatewayRuntime(
   if (isBunRuntime(execPath)) {
     issues.push({
       code: SERVICE_AUDIT_CODES.gatewayRuntimeBun,
-      message: "Gateway service uses Bun; Bun is incompatible with WhatsApp + Telegram channels.",
+      message: "Gateway service uses Bun; OpenClaw runtime state requires node:sqlite.",
       detail: execPath,
       level: "recommended",
     });
@@ -587,7 +586,7 @@ async function auditGatewayRuntime(
         issues.push({
           code: SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
           message:
-            "System Node 22 LTS (22.19+) or Node 24 not found; install it before migrating away from version managers.",
+            "System Node 22 LTS (22.22.3+) or Node 24.15+ not found; install it before migrating away from version managers.",
           level: "recommended",
         });
       }
