@@ -21,7 +21,6 @@ import {
   resolvePackageDirs,
   resolveShrinkwrapJobs,
   restoreCurrentPnpmLockedPackages,
-  runBoundedTasks,
   shouldUseLegacyPeerDepsForShrinkwrap,
   shrinkwrapPackageDirsForChangedPaths,
 } from "../../scripts/generate-npm-shrinkwrap.mjs";
@@ -104,23 +103,6 @@ describe("generate-npm-shrinkwrap", () => {
     expect(() => resolvePackageDirs(["--jobs", "-h"])).toThrow(
       "--jobs requires a positive integer.",
     );
-  });
-
-  it("bounds shrinkwrap package concurrency while preserving result order", async () => {
-    let active = 0;
-    let maxActive = 0;
-    const results = await runBoundedTasks(["slow", "fast", "last"], 2, async (value) => {
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, value === "slow" ? 30 : 5);
-      });
-      active -= 1;
-      return value;
-    });
-
-    expect(maxActive).toBe(2);
-    expect(results).toEqual(["slow", "fast", "last"]);
   });
 
   it("validates shrinkwrap worker counts from flags and environment", () => {
@@ -506,6 +488,15 @@ describe("generate-npm-shrinkwrap", () => {
     ).toEqual(["extensions/acpx"]);
   });
 
+  it("targets the changed publishable gateway protocol shrinkwrap", () => {
+    expect(
+      shrinkwrapPackageDirsForChangedPaths([
+        "packages/gateway-protocol/package.json",
+        "packages/gateway-protocol/npm-shrinkwrap.json",
+      ]).map(repoRelativePath),
+    ).toEqual(["packages/gateway-protocol"]);
+  });
+
   it("targets changed tracked shrinkwraps for private packages", () => {
     expect(
       shrinkwrapPackageDirsForChangedPaths(["extensions/vault/package.json"]).map(repoRelativePath),
@@ -518,6 +509,7 @@ describe("generate-npm-shrinkwrap", () => {
     );
 
     expect(packageDirs).toContain("");
+    expect(packageDirs).toContain("packages/gateway-protocol");
     expect(packageDirs).toContain("extensions/acpx");
     expect(packageDirs).toContain("extensions/vault");
   });
