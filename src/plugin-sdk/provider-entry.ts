@@ -4,6 +4,10 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "../../packages/normalization-core/src/string-normalization.js";
+import type {
+  PluginManifestProviderAuthChoice,
+  PluginManifestSetupProvider,
+} from "../plugins/manifest-types.js";
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 import { projectProviderCatalogResultToUnifiedTextRows } from "../plugins/provider-catalog-unified-text.js";
 import type {
@@ -26,9 +30,28 @@ import type {
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
 } from "./plugin-entry.js";
-import { buildSingleProviderApiKeyCatalog } from "./provider-catalog-shared.js";
+import {
+  buildOpenAICompatibleProviderCatalog,
+  type OpenAICompatibleModelDiscoveryOptions,
+} from "./provider-catalog-live-runtime.js";
+import {
+  buildManifestModelProviderConfig,
+  buildSingleProviderApiKeyCatalog,
+  readManifestProviderDefaultModelRef,
+} from "./provider-catalog-shared.js";
 
 type ApiKeyAuthMethodOptions = Parameters<typeof createProviderApiKeyAuthMethod>[0];
+
+type SingleProviderPluginManifest = {
+  setup?: {
+    providers?: readonly Pick<PluginManifestSetupProvider, "id" | "envVars">[];
+  };
+  providerAuthChoices?: readonly PluginManifestProviderAuthChoice[];
+  modelCatalog?: {
+    providers?: Readonly<Record<string, unknown>>;
+    discovery?: Readonly<Record<string, unknown>>;
+  };
+};
 
 /**
  * API-key auth options for single-provider plugins, with provider id filled in by the entry helper.
@@ -49,6 +72,13 @@ export type SingleProviderPluginApiKeyAuthOptions = Omit<
   wizard?: false | ProviderPluginWizardSetup;
 };
 
+type ManifestProviderAuthOptions = Omit<
+  SingleProviderPluginApiKeyAuthOptions,
+  "methodId" | "label" | "optionKey" | "flagName" | "envVar" | "promptMessage"
+> & {
+  promptMessage?: string;
+};
+
 /**
  * Catalog configuration accepted by the single-provider entry helper.
  */
@@ -57,7 +87,7 @@ export type SingleProviderPluginCatalogOptions =
       /**
        * Builds the live provider catalog through the shared API-key catalog path.
        */
-      buildProvider: Parameters<typeof buildSingleProviderApiKeyCatalog>[0]["buildProvider"];
+      buildProvider?: Parameters<typeof buildSingleProviderApiKeyCatalog>[0]["buildProvider"];
       /**
        * Builds a static catalog for cheap model discovery before credentials are resolved.
        */
@@ -66,6 +96,10 @@ export type SingleProviderPluginCatalogOptions =
        * Allows operator-configured base URLs to override the provider catalog base URL.
        */
       allowExplicitBaseUrl?: boolean;
+      /**
+       * Discovers text/chat models from the provider's OpenAI-compatible model-list endpoint.
+       */
+      liveModelDiscovery?: true | OpenAICompatibleModelDiscoveryOptions;
       run?: never;
       order?: never;
       staticRun?: never;
@@ -86,6 +120,7 @@ export type SingleProviderPluginCatalogOptions =
       buildProvider?: never;
       buildStaticProvider?: never;
       allowExplicitBaseUrl?: never;
+      liveModelDiscovery?: never;
     };
 
 /**
@@ -104,6 +139,11 @@ export type SingleProviderPluginOptions = {
    * Short plugin description surfaced by plugin registries and setup flows.
    */
   description: string;
+  /**
+   * Plugin-owned metadata used to derive API-key auth and model catalogs
+   * without repeating the manifest in the runtime entry.
+   */
+  manifest?: SingleProviderPluginManifest;
   /**
    * @deprecated Declare exclusive plugin kind in `openclaw.plugin.json` via
    * manifest `kind`. Runtime-entry `kind` remains only as a compatibility
@@ -144,6 +184,10 @@ export type SingleProviderPluginOptions = {
      */
     auth?: SingleProviderPluginApiKeyAuthOptions[];
     /**
+     * Provider-owned behavior layered over manifest-derived API-key auth.
+     */
+    manifestAuth?: ManifestProviderAuthOptions;
+    /**
      * Non-API-key auth methods appended after generated API-key methods.
      */
     extraAuth?: ProviderAuthMethod[];
@@ -160,6 +204,50 @@ export type SingleProviderPluginOptions = {
    */
   register?: (api: OpenClawPluginApi) => void;
 };
+
+function resolveManifestProviderAuth(params: {
+  manifest: SingleProviderPluginManifest | undefined;
+  providerId: string;
+  providerLabel: string;
+  overrides?: ManifestProviderAuthOptions;
+}): SingleProviderPluginApiKeyAuthOptions[] {
+  const choice = params.manifest?.providerAuthChoices?.find(
+    (entry) => entry.provider === params.providerId && entry.method === "api-key",
+  );
+  if (!choice) {
+    return [];
+  }
+  const envVar = params.manifest?.setup?.providers?.find((entry) => entry.id === params.providerId)
+    ?.envVars?.[0];
+  if (!choice.choiceLabel || !choice.optionKey || !choice.cliFlag?.startsWith("--") || !envVar) {
+    throw new Error(`Incomplete manifest API-key auth for provider "${params.providerId}"`);
+  }
+  const defaultModel = readManifestProviderDefaultModelRef(params.manifest, params.providerId);
+  return [
+    {
+      methodId: choice.method,
+      label: choice.choiceLabel,
+      ...(choice.choiceHint || choice.groupHint
+        ? { hint: choice.choiceHint ?? choice.groupHint }
+        : {}),
+      optionKey: choice.optionKey,
+      flagName: choice.cliFlag as `--${string}`,
+      envVar,
+      promptMessage: `Enter ${choice.choiceLabel}`,
+      ...(defaultModel ? { defaultModel } : {}),
+      wizard: {
+        choiceId: choice.choiceId,
+        choiceLabel: choice.choiceLabel,
+        groupId: choice.groupId ?? params.providerId,
+        groupLabel: choice.groupLabel ?? params.providerLabel,
+        ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
+        ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
+        methodId: choice.method,
+      },
+      ...params.overrides,
+    },
+  ];
+}
 
 function resolveWizardSetup(params: {
   providerId: string;
@@ -235,7 +323,22 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
       const provider = options.provider;
       if (provider) {
         const providerId = provider.id ?? options.id;
-        const providerAuth = copyProviderAuthOptions(provider.auth);
+        if (
+          !("run" in provider.catalog) &&
+          !provider.catalog.buildProvider &&
+          !options.manifest?.modelCatalog?.providers?.[providerId]
+        ) {
+          throw new Error(`Missing modelCatalog.providers.${providerId}`);
+        }
+        const providerAuth = copyProviderAuthOptions(
+          provider.auth ??
+            resolveManifestProviderAuth({
+              manifest: options.manifest,
+              providerId,
+              providerLabel: provider.label,
+              overrides: provider.manifestAuth,
+            }),
+        );
         const acceptedProviderAuth: SingleProviderPluginApiKeyAuthOptions[] = [];
         const auth = providerAuth.flatMap((entry) => {
           try {
@@ -272,18 +375,49 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
             run: catalogRun!,
           };
         } else {
-          const buildProvider = provider.catalog.buildProvider;
+          const buildProvider =
+            provider.catalog.buildProvider ??
+            (() =>
+              buildManifestModelProviderConfig({
+                providerId,
+                catalog: options.manifest?.modelCatalog?.providers?.[providerId],
+              }));
           catalog = {
             order: "simple",
             run: (ctx: ProviderCatalogContext): Promise<ProviderCatalogResult> =>
-              buildSingleProviderApiKeyCatalog({
-                ctx,
-                providerId,
-                buildProvider,
-                ...(provider.catalog.allowExplicitBaseUrl ? { allowExplicitBaseUrl: true } : {}),
-              }),
+              provider.catalog.liveModelDiscovery
+                ? buildOpenAICompatibleProviderCatalog({
+                    ctx,
+                    providerId,
+                    buildProvider,
+                    ...(provider.catalog.allowExplicitBaseUrl
+                      ? { allowExplicitBaseUrl: true }
+                      : {}),
+                    ...(provider.catalog.liveModelDiscovery === true
+                      ? {}
+                      : { modelDiscovery: provider.catalog.liveModelDiscovery }),
+                  })
+                : buildSingleProviderApiKeyCatalog({
+                    ctx,
+                    providerId,
+                    buildProvider,
+                    ...(provider.catalog.allowExplicitBaseUrl
+                      ? { allowExplicitBaseUrl: true }
+                      : {}),
+                  }),
           };
         }
+        const manifestStaticProvider =
+          "run" in provider.catalog
+            ? undefined
+            : (provider.catalog.buildStaticProvider ??
+              (provider.catalog.buildProvider
+                ? undefined
+                : () =>
+                    buildManifestModelProviderConfig({
+                      providerId,
+                      catalog: options.manifest?.modelCatalog?.providers?.[providerId],
+                    })));
         const staticCatalog: ProviderPluginCatalog | undefined =
           "run" in provider.catalog
             ? provider.catalog.staticRun
@@ -292,11 +426,11 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
                   run: provider.catalog.staticRun,
                 }
               : undefined
-            : provider.catalog.buildStaticProvider
+            : manifestStaticProvider
               ? {
                   order: "simple",
                   run: async () => ({
-                    provider: await provider.catalog.buildStaticProvider!(),
+                    provider: await manifestStaticProvider(),
                   }),
                 }
               : undefined;
@@ -321,6 +455,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
                   "aliases",
                   "envVars",
                   "auth",
+                  "manifestAuth",
                   "extraAuth",
                   "catalog",
                   "staticCatalog",

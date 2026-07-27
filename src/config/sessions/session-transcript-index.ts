@@ -32,7 +32,7 @@ import {
 
 type TranscriptIndexDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  | "sessions"
+  | "session_windows"
   | "session_transcript_active_events"
   | "session_transcript_fts"
   | "session_transcript_index_state"
@@ -50,6 +50,10 @@ export type SessionTranscriptProjectionState = {
 type SessionTranscriptProjectionSourceRow = {
   event: unknown;
   seq: number;
+  // Row's own created_at, used as the FTS fallback timestamp for events that carry no embedded
+  // timestamp. Mirrors the forward-append path (applyForwardIndex passes params.createdAt) so a
+  // full rebuild reproduces the same timestamps instead of stamping Date.now().
+  createdAt: number;
 };
 
 function getIndexKysely(db: DatabaseSync) {
@@ -341,11 +345,13 @@ function rebuildSessionTranscriptIndexInTransaction(
   let activeEventCount = 0;
   let activeMessageCount = 0;
   for (const entry of selectVisibleTranscriptEventEntries(events)) {
-    const indexed = extractTranscriptIndexEntry(entry.event, now);
+    const source = rows[entry.seq - 1];
+    // Stamp timestamp-less events with their own row's created_at (matching the append path); only
+    // fall back to `now` when the source row is somehow missing.
+    const indexed = extractTranscriptIndexEntry(entry.event, source?.createdAt ?? now);
     if (indexed) {
       insertFtsRow(db, sessionId, indexed);
     }
-    const source = rows[entry.seq - 1];
     if (!source || !shouldProjectActiveEvent(entry.event)) {
       continue;
     }
@@ -401,7 +407,7 @@ export function reconcileSessionTranscriptIndexInTransaction(
     db,
     getIndexKysely(db)
       .selectFrom("transcript_events")
-      .select(["event_json", "seq"])
+      .select(["event_json", "seq", "created_at"])
       .where("session_id", "=", sessionId)
       .orderBy("seq", "asc"),
   ).rows;
@@ -411,6 +417,7 @@ export function reconcileSessionTranscriptIndexInTransaction(
     rows.map((row) => ({
       event: JSON.parse(row.event_json) as unknown,
       seq: row.seq,
+      createdAt: row.created_at,
     })),
   );
   return true;
@@ -426,10 +433,10 @@ export function listSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): s
   const rows = executeSqliteQuerySync(
     db,
     kysely
-      .selectFrom("sessions")
+      .selectFrom("session_windows")
       .innerJoin("transcript_events as latest", (join) =>
         join
-          .onRef("latest.session_id", "=", "sessions.session_id")
+          .onRef("latest.session_id", "=", "session_windows.session_id")
           .on((eb) =>
             eb(
               "latest.seq",
@@ -437,14 +444,18 @@ export function listSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): s
               eb
                 .selectFrom("transcript_events as candidate")
                 .select("candidate.seq")
-                .whereRef("candidate.session_id", "=", "sessions.session_id")
+                .whereRef("candidate.session_id", "=", "session_windows.session_id")
                 .orderBy("candidate.seq", "desc")
                 .limit(1),
             ),
           ),
       )
-      .leftJoin("session_transcript_index_state as st", "st.session_id", "sessions.session_id")
-      .select("sessions.session_id")
+      .leftJoin(
+        "session_transcript_index_state as st",
+        "st.session_id",
+        "session_windows.session_id",
+      )
+      .select("session_windows.session_id")
       .where((eb) =>
         eb.or([
           eb(eb.fn.coalesce("st.needs_rebuild", eb.val(1)), "!=", 0),
@@ -453,7 +464,7 @@ export function listSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): s
       )
       // The transcript PK makes the correlated latest-row lookup one index seek per session.
       // Grouping transcript_events here made every healthy search rescan the entire history.
-      .orderBy("sessions.session_id"),
+      .orderBy("session_windows.session_id"),
   ).rows;
   return rows.flatMap((row) => (typeof row.session_id === "string" ? [row.session_id] : []));
 }
