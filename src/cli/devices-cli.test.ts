@@ -695,6 +695,29 @@ describe("devices cli remove", () => {
   });
 });
 
+describe("devices cli reject", () => {
+  it("normalizes a pending request id before rejecting it", async () => {
+    callGateway.mockResolvedValueOnce({ requestId: "req-1", deviceId: "device-1" });
+
+    await runDevicesCommand(["reject", "  req-1  "]);
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expectGatewayCall(0, {
+      method: "device.pair.reject",
+      params: { requestId: "req-1" },
+    });
+  });
+
+  it("explains blank pending request ids without calling the gateway", async () => {
+    await runDevicesCommand(["reject", "   "]);
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(readRuntimeErrorOutput()).toContain("requestId is required.");
+    expect(readRuntimeErrorOutput()).toContain("openclaw devices list");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+});
+
 describe("devices cli clear", () => {
   it("requires --yes before clearing", async () => {
     await runDevicesCommand(["clear"]);
@@ -1247,6 +1270,34 @@ describe("devices cli list", () => {
     expect(output).not.toContain("MacBook Pro");
     expect(output).not.toContain("openclaw-macos");
     expect(output).not.toContain("openclaw-ios");
+  });
+
+  it("shows a deviceId column so identical display names are distinguishable for remove", async () => {
+    const deviceIdA = "a".repeat(64);
+    const deviceIdB = "b".repeat(64);
+    callGateway.mockResolvedValueOnce({
+      pending: [],
+      paired: [
+        pairedDevice({
+          deviceId: deviceIdA,
+          displayName: "OpenClaw Desktop",
+          clientId: "openclaw-macos",
+        }),
+        pairedDevice({
+          deviceId: deviceIdB,
+          displayName: "OpenClaw Desktop",
+          clientId: "openclaw-macos",
+        }),
+      ],
+    });
+
+    await runDevicesCommand(["list"]);
+
+    const output = stripAnsi(readRuntimeOutput());
+    expect(output).toContain("Device ID");
+    expect(output).toContain("Full device IDs");
+    expect(output.split("\n")).toContain(`  ${deviceIdA}  OpenClaw Desktop`);
+    expect(output.split("\n")).toContain(`  ${deviceIdB}  OpenClaw Desktop`);
   });
 });
 

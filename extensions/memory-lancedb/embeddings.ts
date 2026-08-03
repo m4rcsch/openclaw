@@ -1,9 +1,10 @@
 import { Buffer } from "node:buffer";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
@@ -382,8 +383,31 @@ export async function runWithTimeout<T>(params: {
   }
 }
 
-export function formatMemoryRecallError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+export function isMemoryRecallTimeoutError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 3 && current !== undefined; depth += 1) {
+    const record = asRecord(current);
+    const name =
+      current instanceof Error ? current.name : typeof record?.name === "string" ? record.name : "";
+    const message =
+      current instanceof Error
+        ? current.message
+        : typeof record?.message === "string"
+          ? record.message
+          : "";
+    const code = typeof record?.code === "string" ? record.code : "";
+    if (
+      name === "APIConnectionTimeoutError" ||
+      name === "TimeoutError" ||
+      code === "ETIMEDOUT" ||
+      /^UND_ERR_.*_TIMEOUT$/.test(code) ||
+      /\btimed out\b/i.test(message)
+    ) {
+      return true;
+    }
+    current = record?.cause;
+  }
+  return false;
 }
 
 export function buildMemoryRecallUnavailableResult(error: string): AgentToolResult<{
@@ -405,13 +429,14 @@ export function buildMemoryRecallUnavailableResult(error: string): AgentToolResu
 
 export class MemoryRecallEmbeddingError extends Error {
   constructor(readonly originalError: unknown) {
-    super(formatMemoryRecallError(originalError));
+    super(formatErrorMessage(originalError));
     this.name = "MemoryRecallEmbeddingError";
   }
 }
 
 export const testing = {
   isEmbeddingDimensionsRejectedError,
+  isMemoryRecallTimeoutError,
   runWithTimeout,
   truncateEmbeddingVector,
 } as const;
@@ -439,7 +464,11 @@ export function normalizeEmbeddingVector(value: unknown): number[] {
   }
 
   if (typeof value === "string") {
-    const bytes = Buffer.from(value, "base64");
+    const canonicalEmbedding = canonicalizeBase64(value);
+    if (!canonicalEmbedding) {
+      throw new Error("Base64 embedding response is malformed");
+    }
+    const bytes = Buffer.from(canonicalEmbedding, "base64");
     if (bytes.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
       throw new Error("Base64 embedding response has invalid byte length");
     }

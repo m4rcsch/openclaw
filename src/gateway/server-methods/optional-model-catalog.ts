@@ -16,6 +16,16 @@ type OptionalServerMethodModelCatalogLoad<T> = {
   promise: Promise<T | undefined>;
 };
 
+/** Reads already-published startup facts without starting provider discovery on an RPC hot path. */
+export async function readPreparedServerMethodModelCatalog(
+  context: GatewayRequestContext,
+  options?: { agentId?: string },
+): Promise<ModelCatalogEntry[] | undefined> {
+  return context.readPreparedGatewayModelCatalog
+    ? await context.readPreparedGatewayModelCatalog(options)
+    : undefined;
+}
+
 type LoadOptionalServerMethodModelCatalogOptions<T> = {
   loadParams?: Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0];
   logOnceKey?: string;
@@ -59,9 +69,11 @@ function startOptionalServerMethodModelCatalogValueLoad<T>(params: {
 
 function startOptionalServerMethodModelCatalogLoad(
   context: GatewayRequestContext,
+  loadParams?: Parameters<GatewayRequestContext["loadGatewayModelCatalog"]>[0],
 ): OptionalServerMethodModelCatalogLoad<ModelCatalogEntry[]> {
   return startOptionalServerMethodModelCatalogValueLoad({
-    load: () => context.loadGatewayModelCatalog(),
+    load: () =>
+      loadParams ? context.loadGatewayModelCatalog(loadParams) : context.loadGatewayModelCatalog(),
     normalize: normalizeOptionalModelCatalog,
   });
 }
@@ -117,7 +129,7 @@ export async function loadOptionalServerMethodModelCatalog(
   options?: LoadOptionalServerMethodModelCatalogOptions<ModelCatalogEntry[]>,
 ): Promise<ModelCatalogEntry[] | undefined> {
   return await loadOptionalServerMethodModelCatalogValue(context, surface, options, () =>
-    startOptionalServerMethodModelCatalogLoad(context),
+    startOptionalServerMethodModelCatalogLoad(context, options?.loadParams),
   );
 }
 

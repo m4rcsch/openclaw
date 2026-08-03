@@ -22,7 +22,7 @@ import {
   reserveQueuedCronRun,
   updateQueuedCronRunReservationMarker,
 } from "./run-admission.js";
-import type { CronEvent, CronServiceState } from "./state.js";
+import type { CronEvent, CronServiceState, DeferredCronNotifications } from "./state.js";
 import { emit } from "./state.js";
 import {
   ensureLoaded,
@@ -52,6 +52,7 @@ type PreparedManualRun =
       terminalTracker?: ManualRunTerminalTracker;
       owningCronLaneTaskMarker?: CommandLaneTaskMarker;
       reservationAt: number;
+      scheduleOwnershipAtMs: number;
       reservationIdentity: object;
       wasEnabled: boolean;
       payload?: CronPayload;
@@ -67,11 +68,13 @@ export type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
   startedAt: number;
   taskRunId?: string;
   activeJobMarker?: CronActiveJobMarker;
+  admittedJob: CronJob;
   executionJob: CronJob;
 };
 
 export type ManualRunOptions = {
   runId?: string;
+  scheduleOwnershipAtMs?: number;
   payload?: CronPayload;
   terminalTracker?: ManualRunTerminalTracker;
   owningCronLaneTaskMarker?: CommandLaneTaskMarker;
@@ -148,6 +151,7 @@ async function skipInvalidPersistedManualRun(params: {
   error: unknown;
 }) {
   const rollbackSnapshot = snapshotStoreForRollback(params.state);
+  const postPersistNotifications: DeferredCronNotifications = [];
   const endedAt = params.state.deps.nowMs();
   const errorText = normalizeCronRunErrorText(params.error);
   const diagnostics = createCronRunDiagnosticsFromError("cron-preflight", errorText, {
@@ -164,7 +168,10 @@ async function skipInvalidPersistedManualRun(params: {
       startedAt: endedAt,
       endedAt,
     },
-    { scheduleMode: params.mode === "force" ? "preserve" : "advance" },
+    {
+      scheduleMode: params.mode === "force" ? "preserve" : "advance",
+      deferredNotifications: postPersistNotifications,
+    },
   );
 
   emitCronRunFinished(
@@ -189,13 +196,14 @@ async function skipInvalidPersistedManualRun(params: {
 
   recomputeNextRunsForMaintenance(params.state, {
     recomputeExpired: true,
+    deferredNotifications: postPersistNotifications,
     ...(params.mode === "force"
       ? {
           preserveExpiredPacedNextRunJobId: params.job.id,
         }
       : {}),
   });
-  await persistOrRestore(params.state, rollbackSnapshot);
+  await persistOrRestore(params.state, rollbackSnapshot, { postPersistNotifications });
   armTimer(params.state);
 }
 
@@ -379,6 +387,7 @@ export async function prepareManualRun(
       terminalTracker: opts?.terminalTracker,
       owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       reservationAt,
+      scheduleOwnershipAtMs: opts?.scheduleOwnershipAtMs ?? reservationAt,
       reservationIdentity,
       wasEnabled: isJobEnabled(job),
       ...(opts?.payload ? { payload: structuredClone(opts.payload) } : {}),
@@ -499,6 +508,7 @@ export async function activatePreparedManualRun(
     const activeJobMarker = markManualCronJobActive(state, job);
     // Execute against a snapshot so later reload/merge can preserve delivery
     // target writeback from disk without mutating the running object.
+    const admittedJob = structuredClone(job);
     const executionJob = structuredClone(job);
     if (mode === "force" && executionJob.trigger && !prepared.evaluateTrigger) {
       // Force means run the payload now; strip the gate only from this snapshot
@@ -514,6 +524,7 @@ export async function activatePreparedManualRun(
       runId: prepared.runId ?? taskRunId,
       taskRunId,
       activeJobMarker,
+      admittedJob,
       executionJob,
     } as const;
   });

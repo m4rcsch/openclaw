@@ -11,7 +11,7 @@ import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
-import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import {
   resolveSessionPreferredFace,
@@ -68,23 +68,32 @@ function readSidebarNativeGateway(): SidebarNativeGateway | null {
 }
 
 export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
-  const { activeId: cardAgentId, agent: cardAgent, agents: cardAgents } = host.activeChipAgent();
+  const {
+    activeId: cardAgentId,
+    agent: cardAgent,
+    agents: cardAgents,
+    identity: cardIdentity,
+  } = host.activeChipAgent();
   const menuUnread = cardAgents.some((entry) => {
     const agentId = normalizeAgentId(entry.id);
     return agentId !== cardAgentId && host.agentUnreadCount(agentId) > 0;
   });
-  const cardName = cardAgent ? normalizeAgentLabel(cardAgent) : cardAgentId;
+  const cardName =
+    cardIdentity?.name?.trim() || (cardAgent ? normalizeAgentLabel(cardAgent) : cardAgentId);
   const approvalCount = host.sessionData.approvalBadgeSnapshot().agentCounts.get(cardAgentId) ?? 0;
   const cardAvatarText =
-    (cardAgent ? resolveAgentTextAvatar(cardAgent) : null) ??
-    (cardName || cardAgentId).slice(0, 1).toUpperCase();
+    (cardAgent ? resolveAgentTextAvatar(cardAgent, cardIdentity) : cardIdentity?.emoji) ??
+    (deriveAvatarInitial(cardName || cardAgentId) || "?");
+  const newSessionAccess = host.readNewSessionAccess();
   // The sidebar action follows gateway availability; collapsed native chrome
   // keeps its separate offline-tolerant ⌘N mirror.
   return html`
     <div class="sidebar-brand">
       <openclaw-sidebar-agent-card
         .agentName=${cardName}
-        .avatarUrl=${cardAgent ? resolveAgentAvatarUrl(cardAgent) : null}
+        .avatarUrl=${cardAgent
+          ? resolveAgentAvatarUrl(cardAgent, cardIdentity)
+          : cardIdentity?.avatar}
         .avatarText=${cardAvatarText}
         .subtitle=${host.agentChipSubtitle(cardAgentId)}
         .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
@@ -92,19 +101,28 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         .approvalCount=${approvalCount}
         .switcherAvailable=${cardAgents.length > 1}
         .onToggleMenu=${(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
+        @contextmenu=${(event: MouseEvent) => {
+          event.preventDefault();
+          if (host.sidebarMenus.agentMenuPosition !== null) {
+            return;
+          }
+          const card = event.currentTarget as HTMLElement;
+          const trigger = card.querySelector<HTMLElement>(".sidebar-agent-card__main") ?? card;
+          host.sidebarMenus.toggleAgentMenu(trigger);
+        }}
       ></openclaw-sidebar-agent-card>
       <div class="sidebar-brand__actions">
         <openclaw-tooltip
-          .content=${host.connected
+          .content=${newSessionAccess.allowed
             ? t("chat.runControls.newSession")
-            : t("chat.runControls.newSessionDisconnected")}
+            : newSessionAccess.reason}
         >
           <button
             class="sidebar-brand__icon sidebar-brand__new-thread"
             type="button"
-            @click=${() => host.onOpenNewSession?.(host.expandedAgentId())}
+            @click=${() => host.requestOpenNewSession(host.expandedAgentId())}
             aria-label=${t("chat.runControls.newSession")}
-            ?disabled=${!host.connected}
+            ?disabled=${!newSessionAccess.allowed}
           >
             ${icons.plus}
           </button>
@@ -145,6 +163,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         basePath: host.basePath,
         row: mainRow ?? undefined,
         mainKey: parseAgentSessionKey(mainKey)?.rest,
+        preferenceDerivedFace: true,
       }).href}
       class="nav-item nav-item--home ${active ? "nav-item--active" : ""}"
       aria-current=${active ? "page" : nothing}
