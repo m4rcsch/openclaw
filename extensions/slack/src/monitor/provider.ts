@@ -1,5 +1,6 @@
 // Slack provider module implements model/runtime integration.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
@@ -33,8 +34,12 @@ import {
   resolveSlackAccountDmPolicy,
 } from "../accounts.js";
 import { isSlackAnyNativeApprovalClientEnabled } from "../approval-native-gates.js";
-import { resolveSlackProxyDispatcher, resolveSlackWebClientOptions } from "../client-options.js";
-import { createSlackStartupAuthClient } from "../client.js";
+import {
+  resolveSlackLookupClientOptions,
+  resolveSlackProxyDispatcher,
+  resolveSlackWebClientOptions,
+} from "../client-options.js";
+import { createSlackStartupAuthClient, createSlackWebClient } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
@@ -61,12 +66,17 @@ import {
   resolveSlackIdentityHealth,
   resolveSlackInstallationIdentity,
   type SlackAuthTestIdentity,
+  type SlackInstallationIdentity,
 } from "./enterprise-install.js";
 import { registerSlackMonitorEvents } from "./events.js";
 import { createSlackDurableIngress } from "./ingress.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import { openSlackPresenceCooldownStore } from "./presence-cooldown-store.js";
-import { createSlackPresenceMonitor, hasSlackPresenceEventsEnabled } from "./presence-monitor.js";
+import {
+  createSlackPresenceMonitor,
+  hasSlackPresenceEventsEnabled,
+  SLACK_PRESENCE_REQUEST_TIMEOUT_MS,
+} from "./presence-monitor.js";
 import {
   createSlackBoltApp,
   formatSlackChannelResolved,
@@ -91,6 +101,17 @@ import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
 let slackBoltInterop: SlackBoltResolvedExports | undefined;
+
+function withSlackPresenceLifecycleSignal(
+  fetchImpl: FetchFunction,
+  lifecycleSignal: AbortSignal,
+): FetchFunction {
+  return async (input, init) =>
+    await fetchImpl(input, {
+      ...init,
+      signal: init?.signal ? AbortSignal.any([init.signal, lifecycleSignal]) : lifecycleSignal,
+    });
+}
 
 async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
   if (!slackBoltInterop) {
@@ -281,11 +302,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   if (enterpriseOrgInstall && slackMode === "relay") {
     throw new Error(
       `Slack Enterprise Grid org account "${account.accountId}" requires direct socket or HTTP delivery; relay mode is unsupported`,
-    );
-  }
-  if (enterpriseOrgInstall && account.config.execApprovals?.enabled === true) {
-    throw new Error(
-      `Slack Enterprise Grid org account "${account.accountId}" does not support Slack-native exec approvals`,
     );
   }
   if (enterpriseOrgInstall) {
@@ -614,17 +630,34 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     account: slackCfg.presenceEvents,
     channels: slackCfg.channels,
   });
-  const presenceMonitor =
+  const presenceRequestAbort =
     installationIdentity.kind !== "enterprise" && presenceEventsEnabled
-      ? createSlackPresenceMonitor({
-          accountId: account.accountId,
-          accountConfig: slackCfg.presenceEvents,
-          client: app.client.users,
-          cooldownStore: openSlackPresenceCooldownStore(),
-          log: runtime.log,
-          error: runtime.error,
-        })
+      ? new AbortController()
       : undefined;
+  const presenceClient =
+    presenceRequestAbort === undefined
+      ? undefined
+      : (() => {
+          const options = resolveSlackLookupClientOptions(
+            { ...clientOptions, timeout: SLACK_PRESENCE_REQUEST_TIMEOUT_MS },
+            slackDispatcher,
+          );
+          options.fetch = withSlackPresenceLifecycleSignal(
+            options.fetch ?? globalThis.fetch,
+            presenceRequestAbort.signal,
+          );
+          return new WebClient(token, options).users;
+        })();
+  const presenceMonitor = presenceClient
+    ? createSlackPresenceMonitor({
+        accountId: account.accountId,
+        accountConfig: slackCfg.presenceEvents,
+        client: presenceClient,
+        cooldownStore: openSlackPresenceCooldownStore(),
+        log: runtime.log,
+        error: runtime.error,
+      })
+    : undefined;
   if (installationIdentity.kind === "enterprise" && presenceEventsEnabled) {
     runtime.log?.(warn("slack presence events are unavailable for Enterprise Grid org installs"));
   }
@@ -635,12 +668,17 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     onPrepared: presenceMonitor?.observe,
   });
   if (
-    installationIdentity.kind !== "enterprise" &&
     isSlackAnyNativeApprovalClientEnabled({
       cfg,
       accountId: account.accountId,
     })
   ) {
+    const resolveClient = createSlackApprovalClientResolver({
+      appClient: app.client,
+      token,
+      clientOptions,
+      installationIdentity,
+    });
     registerChannelRuntimeContext({
       channelRuntime: opts.channelRuntime,
       channelId: "slack",
@@ -649,16 +687,22 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       context: {
         app,
         config: slackCfg.execApprovals ?? {},
+        resolveClient,
+        ...(installationIdentity.kind === "enterprise"
+          ? {
+              enterprise: {
+                apiAppId: installationIdentity.apiAppId,
+                enterpriseId: installationIdentity.enterpriseId,
+              },
+            }
+          : {}),
       },
       abortSignal: opts.abortSignal,
     });
   }
 
   // Resolve command registration first so App Home never advertises an inactive single command.
-  const commandRegistration =
-    installationIdentity.kind === "enterprise"
-      ? ({ mode: "disabled" } as const)
-      : await registerSlackMonitorSlashCommands({ ctx, account, trackEvent });
+  const commandRegistration = await registerSlackMonitorSlashCommands({ ctx, account, trackEvent });
   const appHomeSlashCommandName =
     commandRegistration.mode === "single" ? commandRegistration.name : undefined;
   registerSlackMonitorEvents({
@@ -945,6 +989,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     }
   } finally {
+    presenceRequestAbort?.abort();
     await presenceMonitor?.stop();
     if (slackMode === "relay") {
       setSlackDefaultSendIdentity(account.accountId, undefined);
@@ -956,6 +1001,34 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     await gracefulStop();
     await slackDispatcher?.close();
   }
+}
+
+function createSlackApprovalClientResolver(params: {
+  appClient: WebClient;
+  token: string;
+  clientOptions: WebClientOptions;
+  installationIdentity: SlackInstallationIdentity;
+}): (teamId?: string) => WebClient {
+  if (params.installationIdentity.kind !== "enterprise") {
+    return () => params.appClient;
+  }
+  const clients = new Map<string, WebClient>();
+  return (rawTeamId?: string) => {
+    const teamId = rawTeamId?.trim().toUpperCase();
+    if (!teamId || !/^T[A-Z0-9]+$/.test(teamId)) {
+      throw new Error("Slack Enterprise Grid approval delivery requires a valid teamId");
+    }
+    const cached = clients.get(teamId);
+    if (cached) {
+      return cached;
+    }
+    const client = createSlackWebClient(params.token, {
+      ...params.clientOptions,
+      teamId,
+    });
+    clients.set(teamId, client);
+    return client;
+  };
 }
 
 export const resolveSlackRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;

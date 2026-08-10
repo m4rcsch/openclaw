@@ -2,6 +2,7 @@
 // commands while preserving lifecycle hooks and completion delivery.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../context-engine/types.js";
 import { getDetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime.js";
@@ -106,12 +107,7 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) 
   return count;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireSubagentEndedHookCall(runId: string): {
   event: Record<string, unknown>;
@@ -1169,7 +1165,7 @@ describe("subagent registry steer restarts", () => {
     expect(countMatching(childRunIds, (id) => id === "run-child")).toBe(1);
   });
 
-  it("retries completion-mode announce delivery with backoff and suspends after retry limit", async () => {
+  it("retries completion delivery beyond three attempts and suspends at its deadline", async () => {
     {
       vi.useFakeTimers();
       try {
@@ -1187,25 +1183,20 @@ describe("subagent registry steer restarts", () => {
         expect(announceSpy).toHaveBeenCalledTimes(1);
         expect(listMainRuns()[0]?.delivery?.attemptCount).toBe(1);
 
-        await vi.advanceTimersByTimeAsync(999);
-        expect(announceSpy).toHaveBeenCalledTimes(1);
-        await vi.advanceTimersByTimeAsync(1);
-        expect(announceSpy).toHaveBeenCalledTimes(2);
-        expect(listMainRuns()[0]?.delivery?.attemptCount).toBe(2);
+        await vi.advanceTimersByTimeAsync(5 * 60_000);
+        expect(announceSpy.mock.calls.length).toBeGreaterThan(3);
+        expect(listMainRuns()[0]?.delivery?.status).not.toBe("suspended");
 
-        await vi.advanceTimersByTimeAsync(1_999);
-        expect(announceSpy).toHaveBeenCalledTimes(2);
-        await vi.advanceTimersByTimeAsync(1);
-        expect(announceSpy).toHaveBeenCalledTimes(3);
-        expect(listMainRuns()[0]?.delivery?.attemptCount).toBe(3);
-
-        await vi.advanceTimersByTimeAsync(4_001);
-        expect(announceSpy).toHaveBeenCalledTimes(3);
+        const deadlineAt = listMainRuns()[0]?.delivery?.deadlineAt;
+        expect(deadlineAt).toBeTypeOf("number");
+        vi.setSystemTime((deadlineAt ?? Date.now()) + 1);
+        mod.resumeSubagentRun("run-completion-retry");
+        await vi.advanceTimersByTimeAsync(0);
         await waitForRegistrySideEffect(() => {
           const run = listMainRuns()[0];
           expect(run?.delivery?.status).toBe("suspended");
           expect(run?.delivery?.suspendedAt).toBeTypeOf("number");
-          expect(run?.delivery?.suspendedReason).toBe("retry-limit");
+          expect(run?.delivery?.suspendedReason).toBe("expiry");
           expect(run?.cleanupCompletedAt).toBeUndefined();
         });
       } finally {

@@ -2,7 +2,7 @@ import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway
 import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-icon.js";
+import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
@@ -18,6 +18,7 @@ import {
 } from "../lib/sessions/grouping.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
+import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import type { SessionPlacementState } from "./session-row-badges.ts";
 
 export type SidebarSessionAttention =
@@ -72,7 +73,6 @@ export type SidebarRecentSession = {
   archived?: boolean;
   visibility?: SessionVisibility;
   draftOwnedBySelf?: boolean;
-  icon?: string;
   category?: string;
   boardFace?: BoardFace;
   channel?: string;
@@ -83,7 +83,7 @@ export type SidebarRecentSession = {
   worktreeId?: string;
   placementState?: SessionPlacementState;
   workspaceConflictCount?: number;
-  cloudWorkerActive: boolean;
+  cloudWorkerStopAction: CloudWorkerStopAction | null;
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
   outboxCount?: number;
@@ -96,6 +96,7 @@ export type SidebarRecentSession = {
     "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
   spawnedBy?: string;
+  forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
   status?: SessionRunStatus;
   startedAt?: number;
   updatedAt?: number | null;
@@ -185,7 +186,6 @@ export type SidebarSessionPatch = {
   unread?: boolean;
   label?: string | null;
   category?: string | null;
-  icon?: string | null;
 };
 
 export const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
@@ -194,6 +194,10 @@ export const SIDEBAR_SESSION_SEE_LESS_THRESHOLD = 30;
 
 export function sidebarSessionMetaId(key: string): string {
   return `sidebar-session-meta-${encodeURIComponent(key)}`;
+}
+
+export function sidebarSessionStateId(key: string): string {
+  return `sidebar-session-state-${encodeURIComponent(key)}`;
 }
 
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";

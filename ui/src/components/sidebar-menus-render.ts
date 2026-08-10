@@ -11,6 +11,7 @@ import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import {
   canArchiveSessionRow,
+  canDeleteSessionRows,
   normalizeAgentId,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
@@ -45,11 +46,33 @@ function sessionMenuActionDisabledReasons(
     method: "sessions.patch",
     params: { key: session.key, label: null },
   });
+  const batchPatchReason = (patch: Record<string, unknown>) => {
+    if (!batchRows) {
+      return patchReason;
+    }
+    const access = readSessionMethodAccess(snapshot, {
+      method: "sessions.patchMany",
+      params: {
+        targets: batchRows.map((row) => ({ key: row.key })),
+        patch,
+      },
+    });
+    if (access.allowed) {
+      return undefined;
+    }
+    return access.cause === "method-unavailable" ? patchReason : access.reason;
+  };
+  const unreadReason = batchPatchReason({ unread: true });
+  const categoryReason = batchPatchReason({ category: null });
+  const archiveReason = batchPatchReason({ archived: true });
   const groupReason = reason({
     method: "sessions.groups.put",
     requiredScope: "operator.write",
   });
   const deleteRows = batchRows ?? [session];
+  const cloudWorkerStopReason = session.cloudWorkerStopAction
+    ? reason(session.cloudWorkerStopAction)
+    : undefined;
   const deleteReason = deleteRows
     .map((row) =>
       reason({
@@ -62,14 +85,13 @@ function sessionMenuActionDisabledReasons(
     ...(patchReason
       ? {
           "toggle-pin": patchReason,
-          "set-icon": patchReason,
-          "toggle-unread": patchReason,
           rename: patchReason,
-          "move-to-group": patchReason,
-          "toggle-archived": patchReason,
         }
       : {}),
-    ...(groupReason || patchReason ? { "new-group": groupReason ?? patchReason } : {}),
+    ...(unreadReason ? { "toggle-unread": unreadReason } : {}),
+    ...(categoryReason ? { "move-to-group": categoryReason } : {}),
+    ...(archiveReason ? { "toggle-archived": archiveReason } : {}),
+    ...(groupReason || categoryReason ? { "new-group": groupReason ?? categoryReason } : {}),
     ...(deleteReason ? { delete: deleteReason } : {}),
     ...(batchRows
       ? {}
@@ -85,14 +107,7 @@ function sessionMenuActionDisabledReasons(
                 }),
               }
             : {}),
-          ...(reason({ method: "sessions.reclaim", requiredScope: "operator.admin" })
-            ? {
-                "stop-cloud-worker": reason({
-                  method: "sessions.reclaim",
-                  requiredScope: "operator.admin",
-                }),
-              }
-            : {}),
+          ...(cloudWorkerStopReason ? { "stop-cloud-worker": cloudWorkerStopReason } : {}),
         }),
   };
 }
@@ -104,6 +119,7 @@ export function renderSidebarCustomizeMenuForController(controller: SidebarMenus
   return renderSidebarCustomizeMenu({
     position,
     sidebarEntries: host.sidebarEntries,
+    preferencesBrowserOnly: host.preferencesBrowserOnly,
     isRouteEnabled: (routeId) => controller.isRouteEnabled(routeId),
     workboardBoards: host.workboardBoards,
     workboardRenderers: host.workboardRenderers,
@@ -223,18 +239,26 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
     selection.length > 1 && selection.some((row) => row.key === session.key) ? selection : null;
   const rows = batchRows ?? [session];
   const archiveAllowed = rows.every((row) => canArchiveSessionRow(row, mainKey));
+  const deleteAllowed = canDeleteSessionRows(rows, mainKey);
   const allUnread = rows.every((row) => row.unread);
   const allArchived = rows.every((row) => row.archived === true);
   const sharedCategory = rows.every((row) => (row.category ?? null) === (rows[0]?.category ?? null))
     ? (rows[0]?.category ?? null)
     : null;
+  const cloudWorkerStopAction = session.cloudWorkerStopAction;
+  const cloudWorkerStopAllowed = Boolean(
+    !batchRows &&
+    cloudWorkerStopAction &&
+    (cloudWorkerStopAction.method !== "sessions.reclaim" || !session.hasActiveRun) &&
+    context &&
+    isGatewayMethodAdvertised(context.gateway.snapshot, cloudWorkerStopAction.method) === true,
+  );
   return keyed(
     menu,
     html`
       <openclaw-session-menu
         .session=${{
           label: session.label,
-          icon: session.icon,
           pinned: session.pinned,
           unread: batchRows ? allUnread : session.unread,
           archived: allArchived,
@@ -252,15 +276,9 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
         )}
         .forkDisabled=${host.sessionData.sessionsLoading || session.modelSelectionLocked}
         .archiveAllowed=${archiveAllowed}
-        .cloudWorkerStopAllowed=${Boolean(
-          !batchRows &&
-          session.cloudWorkerActive &&
-          !session.hasActiveRun &&
-          context &&
-          isGatewayMethodAdvertised(context.gateway.snapshot, "sessions.reclaim") === true,
-        )}
+        .deleteAllowed=${deleteAllowed}
+        .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
         .groups=${host.knownSessionGroups()}
-        .canOpenChat=${true}
         .work=${batchRows ? null : controller.sessionMenuWork}
         .workboard=${null}
         .onClose=${() => {
@@ -274,9 +292,6 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
             return;
           }
           switch (action.kind) {
-            case "open-chat":
-              host.selectSession(session.key);
-              break;
             case "open-pr":
               openExternalUrlSafe(action.url);
               break;
@@ -285,9 +300,6 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               break;
             case "toggle-pin":
               void host.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
-              break;
-            case "set-icon":
-              void host.sessionOrganizer.patchSession(session, { icon: action.icon });
               break;
             case "toggle-unread":
               void host.sessionOrganizer.patchSession(session, { unread: !session.unread });

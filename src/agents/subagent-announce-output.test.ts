@@ -573,24 +573,18 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).not.toContain("(no output)");
   });
 
-  it("uses pending delivery payload text when completion text has been cleared", () => {
+  it("does not recover result text from delivery metadata after completion text is cleared", () => {
     const findings = buildChildCompletionFindings([
       {
         childSessionKey: "agent:main:subagent:child",
         task: "child task",
         createdAt: 1,
         completion: { resultText: null },
-        delivery: {
-          payload: {
-            frozenResultText: "delivery payload output",
-          },
-        },
         execution: { outcome: { status: "ok" } },
       },
     ]);
 
-    expect(findings).toContain("delivery payload output");
-    expect(findings).not.toContain("(no output)");
+    expect(findings).toContain("(no output)");
   });
 
   it("uses captured fallback output when a resumed completion returns NO_REPLY", () => {
@@ -740,25 +734,28 @@ describe("applySubagentWaitOutcome", () => {
     });
   });
 
-  it("keeps explicit cancellation distinct from timeout outcomes", () => {
-    const applied = applySubagentWaitOutcome({
-      wait: {
-        status: "timeout",
+  it.each(["rpc", "superseded"] as const)(
+    "keeps explicit %s cancellation distinct from timeout outcomes",
+    (stopReason) => {
+      const applied = applySubagentWaitOutcome({
+        wait: {
+          status: "timeout",
+          startedAt: 100,
+          endedAt: 150,
+          stopReason,
+        },
+        outcome: undefined,
+      });
+
+      expect(applied.outcome).toEqual({
+        status: "error",
+        error: "subagent run terminated",
         startedAt: 100,
         endedAt: 150,
-        stopReason: "rpc",
-      },
-      outcome: undefined,
-    });
-
-    expect(applied.outcome).toEqual({
-      status: "error",
-      error: "subagent run terminated",
-      startedAt: 100,
-      endedAt: 150,
-      elapsedMs: 50,
-    });
-  });
+        elapsedMs: 50,
+      });
+    },
+  );
 
   it("treats aborted ok wait snapshots as terminated subagent errors", () => {
     const applied = applySubagentWaitOutcome({

@@ -7,6 +7,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
+import { resolveFreshSessionTotalTokens } from "../config/sessions/types.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
@@ -339,7 +340,11 @@ export function applySubagentWaitOutcome(params: {
   // primary normalizers, so preserve the shared timeout/cancel precedence here.
   if (terminalOutcome?.status === "timeout") {
     outcome = { status: "timeout" };
-  } else if (terminalOutcome?.reason === "aborted" || terminalOutcome?.reason === "cancelled") {
+  } else if (
+    terminalOutcome?.reason === "aborted" ||
+    terminalOutcome?.reason === "cancelled" ||
+    terminalOutcome?.reason === "superseded"
+  ) {
     outcome = { status: "error", error: "subagent run terminated" };
   } else if (
     terminalOutcome?.reason === "blocked" ||
@@ -427,12 +432,6 @@ type ChildCompletionRow = {
     resultText?: string | null;
     fallbackResultText?: string | null;
   };
-  delivery?: {
-    payload?: {
-      frozenResultText?: string | null;
-      fallbackFrozenResultText?: string | null;
-    };
-  };
 };
 
 type ChildCompletionSection = {
@@ -442,11 +441,8 @@ type ChildCompletionSection = {
 };
 
 function selectChildCompletionResultText(child: ChildCompletionRow): string | undefined {
-  const primary = child.completion?.resultText ?? child.delivery?.payload?.frozenResultText;
-  const fallback =
-    child.completion?.fallbackResultText ??
-    child.delivery?.payload?.fallbackFrozenResultText ??
-    child.frozenResultText;
+  const primary = child.completion?.resultText;
+  const fallback = child.completion?.fallbackResultText ?? child.frozenResultText;
   if (child.execution.outcome?.status === "ok") {
     return selectDeliverableSessionsReply(primary, fallback);
   }
@@ -456,9 +452,7 @@ function selectChildCompletionResultText(child: ChildCompletionRow): string | un
 function hasCapturedChildCompletionReply(child: ChildCompletionRow): boolean {
   return [
     child.completion?.resultText,
-    child.delivery?.payload?.frozenResultText,
     child.completion?.fallbackResultText,
-    child.delivery?.payload?.fallbackFrozenResultText,
     child.frozenResultText,
   ].some((value) => Boolean(value?.trim()));
 }
@@ -574,12 +568,6 @@ export function dedupeLatestChildCompletionRows(
       resultText?: string | null;
       fallbackResultText?: string | null;
     };
-    delivery?: {
-      payload?: {
-        frozenResultText?: string | null;
-        fallbackFrozenResultText?: string | null;
-      };
-    };
   }>,
 ) {
   const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
@@ -605,12 +593,6 @@ export function filterCurrentDirectChildCompletionRows(
     completion?: {
       resultText?: string | null;
       fallbackResultText?: string | null;
-    };
-    delivery?: {
-      payload?: {
-        frozenResultText?: string | null;
-        fallbackFrozenResultText?: string | null;
-      };
     };
   }>,
   params: {
@@ -671,7 +653,7 @@ export async function buildCompactAnnounceStatsLine(params: {
     const hasTokenData =
       typeof entry?.inputTokens === "number" ||
       typeof entry?.outputTokens === "number" ||
-      typeof entry?.totalTokens === "number";
+      resolveFreshSessionTotalTokens(entry) !== undefined;
     if (hasTokenData) {
       break;
     }
@@ -686,7 +668,7 @@ export async function buildCompactAnnounceStatsLine(params: {
   const input = typeof entry?.inputTokens === "number" ? entry.inputTokens : 0;
   const output = typeof entry?.outputTokens === "number" ? entry.outputTokens : 0;
   const ioTotal = input + output;
-  const promptCache = typeof entry?.totalTokens === "number" ? entry.totalTokens : undefined;
+  const promptCache = resolveFreshSessionTotalTokens(entry);
   const runtimeMs =
     typeof params.startedAt === "number" && typeof params.endedAt === "number"
       ? Math.max(0, params.endedAt - params.startedAt)

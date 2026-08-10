@@ -312,6 +312,22 @@ describe("release Telegram QA workflow", () => {
     });
     expect(step("trusted_identity", "Verify dispatched-main identity").id).toBe("identity");
 
+    const candidateBuild = requireRun(
+      "build_candidate",
+      "Build candidate runtime without runner credentials",
+    );
+    expect(candidateBuild).toContain("pnpm build qaRuntime");
+    expect(candidateBuild).not.toContain("scripts/build-all.mts");
+    expect(requireRun("build_candidate", "Archive bounded candidate tree")).toContain(
+      '--arg buildCommand "pnpm build qaRuntime"',
+    );
+    expect(requireRun("attest_candidate", "Bounded extract and validate candidate")).toContain(
+      '.buildCommand == "pnpm build qaRuntime"',
+    );
+    expect(requireRun("run_telegram", "Build trusted QA harness").trim()).toBe(
+      "pnpm build qaRuntime",
+    );
+
     const runJob = job("run_telegram");
     expect(runJob.environment).toBe("qa-live-shared");
     expect(runJob["timeout-minutes"]).toBe(60);
@@ -453,5 +469,20 @@ describe("release Telegram QA workflow", () => {
       spawnSync(process.execPath, ["--import", preloadPath, "-e", ""], { encoding: "utf8", env })
         .status,
     ).not.toBe(0);
+  });
+
+  it("shares only the isolated workspace with the trusted scenario host", () => {
+    const createSut = requireRun(
+      "run_telegram",
+      "Create isolated Telegram SUT identity and launcher",
+    );
+
+    expect(createSut).toContain('workspace="${temp_root}/workspace"');
+    expect(createSut).toContain('chown -R "$RUNNER_UID:$SUT_GID" "$workspace"');
+    expect(createSut).toContain('chmod -R u=rwX,g=rwX,o= "$workspace"');
+    expect(createSut).toContain('find "$workspace" -type d -exec chmod g+s {} +');
+    expect(createSut).not.toContain(
+      'for path in \\\n            "$temp_root/workspace" \\\n            "${OPENCLAW_HOME:?}"',
+    );
   });
 });
